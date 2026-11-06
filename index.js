@@ -389,6 +389,15 @@ export function apply(ctx, config = {}) {
   cfg.baseURL = cfg.baseURL.replace(/\/+$/, '')
   if (typeof cfg.apiKey !== 'string') cfg.apiKey = ''
   cfg.apiKey = cfg.apiKey.trim()
+  // Strip surrounding quotes if the key was pasted with them ("sk-..." /
+  // 'sk-...'): the relay would reject the quotes as part of the key.
+  if (cfg.apiKey.length >= 2) {
+    const first = cfg.apiKey[0]
+    const last = cfg.apiKey[cfg.apiKey.length - 1]
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      cfg.apiKey = cfg.apiKey.slice(1, -1).trim()
+    }
+  }
   if (!Number.isFinite(cfg.refreshSeconds)) cfg.refreshSeconds = DEFAULTS.refreshSeconds
   cfg.refreshSeconds = Math.min(Math.max(Math.trunc(cfg.refreshSeconds), 10), 3600)
 

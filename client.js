@@ -266,15 +266,14 @@ window.__ModuleLoader__.load({
         return () => clearInterval(timer)
       }, [load, refreshSeconds])
 
-      const rowStyle = {
-        display: 'flex',
-        justifyContent: 'space-between',
-        gap: '12px',
-        fontSize: '13px',
-        lineHeight: 1.6,
+      // --- shared card chrome (DSH tokens with plain fallbacks) ---
+      const cardStyle = {
+        background: 'var(--dsw-alias-bg-elevated, rgba(128,128,128,0.06))',
+        border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.18))',
+        borderRadius: '12px',
       }
-      const labelStyle = { color: 'var(--dsw-alias-label-secondary)' }
-      const valueStyle = { color: 'var(--dsw-alias-label-primary)', textAlign: 'right' }
+      const labelStyle = { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' }
+      const valueStyle = { fontSize: '16px', fontWeight: 600, lineHeight: 1.3, color: 'var(--dsw-alias-label-primary)' }
 
       const refreshButton = h(
         'button',
@@ -286,11 +285,11 @@ window.__ModuleLoader__.load({
             display: 'inline-flex',
             alignItems: 'center',
             gap: '6px',
-            padding: '6px 12px',
+            padding: '6px 14px',
             fontSize: '12px',
             fontWeight: 500,
-            borderRadius: 'var(--dsw-radius-md, 8px)',
-            border: '0.5px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.3))',
+            borderRadius: '999px',
+            border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
             background: loading
               ? 'var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.12))'
               : 'var(--dsw-alias-button-elevated-fill, rgba(128,128,128,0.08))',
@@ -304,7 +303,7 @@ window.__ModuleLoader__.load({
       const header = h(
         'div',
         { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' } },
-        h('div', { style: { fontSize: '14px', fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } },
+        h('div', { style: { fontSize: '15px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } },
           text(translate, 'panel.title')),
         refreshButton,
       )
@@ -322,8 +321,8 @@ window.__ModuleLoader__.load({
         if (error === 'no-key') {
           return h(
             'div',
-            { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-            h('div', { style: { fontSize: '13px', fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } },
+            { style: { ...cardStyle, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '6px' } },
+            h('div', { style: { fontSize: '13px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } },
               text(translate, 'panel.emptyTitle')),
             h('div', { style: { fontSize: '13px', lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' } },
               text(translate, 'panel.emptyBody')),
@@ -337,7 +336,17 @@ window.__ModuleLoader__.load({
               : text(translate, 'panel.errorGeneric', { error })
           return h(
             'div',
-            { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+            {
+              style: {
+                ...cardStyle,
+                padding: '14px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                borderColor: 'var(--dsw-alias-state-error-primary, rgba(211,51,51,0.4))',
+                background: 'var(--dsw-alias-state-error-bg, rgba(211,51,51,0.06))',
+              },
+            },
             h('div', { style: { fontSize: '13px', lineHeight: 1.6, color: 'var(--dsw-alias-state-error-primary, #d33)' } }, message),
             h('button',
               {
@@ -345,11 +354,11 @@ window.__ModuleLoader__.load({
                 onClick: load,
                 style: {
                   alignSelf: 'flex-start',
-                  padding: '6px 12px',
+                  padding: '6px 14px',
                   fontSize: '12px',
                   fontWeight: 500,
-                  borderRadius: 'var(--dsw-radius-md, 8px)',
-                  border: '0.5px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.3))',
+                  borderRadius: '999px',
+                  border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
                   background: 'var(--dsw-alias-button-elevated-fill, rgba(128,128,128,0.08))',
                   color: 'var(--dsw-alias-label-primary)',
                   cursor: 'pointer',
@@ -361,65 +370,112 @@ window.__ModuleLoader__.load({
         if (data === null) return null
 
         const isLow = typeof data.balanceUsd === 'number' && data.balanceUsd < LOW_BALANCE_USD
-        const rows = [
+        const balanceText = data.unlimited === true
+          ? text(translate, 'panel.unlimited')
+          : fmtMoney(data.balanceDisplay ?? data.balanceUsd, data.currency)
+
+        // Hero: balance on a card, with a blue ¥ chip and the key hint.
+        const hero = h(
+          'div',
+          { style: { ...cardStyle, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '6px' } },
+          h(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' } },
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+              h('span', {
+                style: {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '22px',
+                  height: '22px',
+                  borderRadius: '50%',
+                  background: 'var(--dsw-alias-state-info-primary, #2f7cf6)',
+                  color: '#fff',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                },
+              }, data.currency === 'CNY' ? '¥' : '$'),
+              h('span', { style: labelStyle }, text(translate, 'panel.balance')),
+            ),
+            data.keyHint !== undefined
+              ? h('span', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))' } }, data.keyHint)
+              : null,
+          ),
+          h('div', {
+            style: {
+              fontSize: '30px',
+              fontWeight: 700,
+              lineHeight: 1.2,
+              color: isLow
+                ? 'var(--dsw-alias-state-error-primary, #d33)'
+                : 'var(--dsw-alias-label-primary)',
+            },
+          }, balanceText),
+          isLow
+            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-state-error-primary, #d33)' } },
+                text(translate, 'panel.lowBalance'))
+            : null,
+          data.username !== undefined || data.keyName !== undefined
+            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+                [data.username, data.keyName].filter((part) => part !== undefined).join(' · '))
+            : null,
+        )
+
+        // 2x2 stat grid, same card chrome as the hero.
+        const stats = [
           [text(translate, 'panel.used'), fmtMoney(data.usedDisplay ?? data.usedUsd, data.currency)],
           [text(translate, 'panel.today'), fmtMoney(data.todayDisplay ?? data.todayUsd, data.currency)],
           [text(translate, 'panel.requestsToday'), fmtNum(data.requestsToday)],
-          [text(translate, 'panel.requestsTotal'), fmtNum(data.requestsTotal)],
           [text(translate, 'panel.tokensToday'), fmtNum(data.tokensToday)],
-          [text(translate, 'panel.tokensTotal'), fmtNum(data.tokensTotal)],
         ]
-        if (data.keyName !== undefined || data.keyHint !== undefined) {
-          rows.push([
-            data.keyName !== undefined ? data.keyName : 'Key',
-            data.keyHint !== undefined ? data.keyHint : '',
-          ])
-        }
+        const grid = h(
+          'div',
+          { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' } },
+          stats.map(([label, value]) => h(
+            'div',
+            { key: label, style: { ...cardStyle, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '2px' } },
+            h('span', { style: labelStyle }, label),
+            h('span', { style: valueStyle }, value),
+          )),
+        )
+
+        // Small meta rows under the grid: total requests, expiry, models.
+        const metaRows = []
+        metaRows.push([text(translate, 'panel.requestsTotal'), fmtNum(data.requestsTotal)])
         if (data.neverExpires === true) {
-          rows.push([text(translate, 'panel.expires'), text(translate, 'panel.neverExpires')])
+          metaRows.push([text(translate, 'panel.expires'), text(translate, 'panel.neverExpires')])
         } else if (data.expiresAt !== undefined) {
-          rows.push([text(translate, 'panel.expires'), fmtDate(data.expiresAt)])
+          metaRows.push([text(translate, 'panel.expires'), fmtDate(data.expiresAt)])
         }
         if (Array.isArray(data.modelLimits) && data.modelLimits.length > 0) {
-          rows.push([text(translate, 'panel.models'), data.modelLimits.join(', ')])
+          metaRows.push([text(translate, 'panel.models'), data.modelLimits.join(', ')])
         }
+        const meta = h(
+          'div',
+          { style: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '2px 4px' } },
+          metaRows.map(([label, value]) => h(
+            'div',
+            { key: label, style: { display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '13px', lineHeight: 1.6 } },
+            h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, label),
+            h('span', { style: { color: 'var(--dsw-alias-label-primary)', textAlign: 'right' } }, value),
+          )),
+        )
 
         return h(
           'div',
           { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
-          h(
-            'div',
-            { style: { display: 'flex', flexDirection: 'column', gap: '2px' } },
-            h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
-              text(translate, 'panel.balance')),
-            h('div', {
-              style: {
-                fontSize: '28px',
-                fontWeight: 600,
-                lineHeight: 1.2,
-                color: isLow
-                  ? 'var(--dsw-alias-state-error-primary, #d33)'
-                  : 'var(--dsw-alias-label-primary)',
-              },
-            }, data.unlimited === true ? text(translate, 'panel.unlimited') : fmtMoney(data.balanceDisplay ?? data.balanceUsd, data.currency)),
-            isLow
-              ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-state-error-primary, #d33)' } },
-                  text(translate, 'panel.lowBalance'))
-              : null,
-          ),
-          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
-            rows.map(([label, value]) => h(
-              'div',
-              { key: label, style: rowStyle },
-              h('span', { style: labelStyle }, label),
-              h('span', { style: valueStyle }, value),
-            ))),
+          hero,
+          grid,
+          meta,
         )
       })()
 
       return h(
         'div',
-        { style: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' } },
+        { style: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' } },
         header,
         body,
         footer,
