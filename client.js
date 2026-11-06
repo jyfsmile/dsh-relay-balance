@@ -65,6 +65,8 @@ window.__ModuleLoader__.load({
         'panel.errorGeneric': 'Could not read the balance: {error}',
         'panel.errorHttp': 'Relay returned HTTP {status}. Check the API key.',
         'panel.errorNetwork': 'Cannot reach the relay. Check the network / base URL.',
+        'panel.errorRateLimited': 'Too many requests — the relay asked us to slow down. Wait a moment and retry.',
+        'panel.errorRelay': 'The relay had a temporary problem: {error}',
         'panel.errorNoKey': 'No API key configured.',
         'panel.lowBalance': 'Balance is low (under $1).',
         'panel.unlimited': 'Unlimited quota',
@@ -96,6 +98,8 @@ window.__ModuleLoader__.load({
         'panel.errorGeneric': '读不到余额：{error}',
         'panel.errorHttp': '中转站返回 HTTP {status}，检查一下 API Key 是否正确。',
         'panel.errorNetwork': '连不上中转站，检查网络 / base URL。',
+        'panel.errorRateLimited': '请求太频繁了，中转站让慢一点，等一下再试。',
+        'panel.errorRelay': '中转站暂时出了点问题：{error}',
         'panel.errorNoKey': '还没有填 API Key。',
         'panel.lowBalance': '余额偏低（低于 $1）。',
         'panel.unlimited': '额度不限',
@@ -231,6 +235,7 @@ window.__ModuleLoader__.load({
       const [data, setData] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState(null)
+      const [detail, setDetail] = React.useState(null)
       const [updatedAt, setUpdatedAt] = React.useState(null)
       const [refreshSeconds, setRefreshSeconds] = React.useState(60)
 
@@ -242,17 +247,21 @@ window.__ModuleLoader__.load({
           if (body && body.ok === true) {
             setData(body)
             setError(null)
-            setUpdatedAt(Date.now())
+            setDetail(null)
+            // Use the Host's fetch time, so a cached result shows its real age.
+            setUpdatedAt(typeof body.fetchedAt === 'number' ? body.fetchedAt : Date.now())
             if (typeof body.refreshSeconds === 'number' && body.refreshSeconds >= 10) {
               setRefreshSeconds(body.refreshSeconds)
             }
           } else {
             setData(null)
             setError(body && typeof body.error === 'string' ? body.error : 'unknown')
+            setDetail(body && typeof body.detail === 'string' ? body.detail : null)
           }
         } catch {
           setData(null)
           setError('network')
+          setDetail(null)
         } finally {
           setLoading(false)
         }
@@ -331,9 +340,13 @@ window.__ModuleLoader__.load({
         if (error !== null) {
           const message = error === 'network'
             ? text(translate, 'panel.errorNetwork')
-            : error.startsWith('http:')
-              ? text(translate, 'panel.errorHttp', { status: error.slice(5) })
-              : text(translate, 'panel.errorGeneric', { error })
+            : error === 'rate-limited'
+              ? text(translate, 'panel.errorRateLimited')
+              : error === 'relay'
+                ? text(translate, 'panel.errorRelay', { error: detail ?? 'unknown' })
+                : error.startsWith('http:')
+                  ? text(translate, 'panel.errorHttp', { status: error.slice(5) })
+                  : text(translate, 'panel.errorGeneric', { error })
           return h(
             'div',
             {

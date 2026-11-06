@@ -22,6 +22,12 @@
  *   - today: GET /api/log/self/stat -> /api/data/self -> /api/log/token
  *     (first working tier wins), same as gateway-wallet's readWindow.
  *   - account: GET /api/user/self -> quota / used_quota / request_count.
+ *
+ * Request discipline (the relay rate-limits bursts, and a burst used to make
+ * the panel flap between working and HTTP 401): a successful balance result
+ * is cached for 60s, concurrent route calls share one in-flight fetch, the
+ * station's /api/status is cached for 10 minutes, and today's numbers come
+ * from a single log walk (max 3 pages) shared by spend and tokens.
  */
 
 const ROUTE_PATH = '/dsh-relay-balance/balance'
@@ -29,13 +35,21 @@ const DEFAULT_BASE_URL = 'https://spanagent.xyz'
 const DEFAULT_QUOTA_PER_UNIT = 500000
 const TIMEOUT_MS = 15000
 const LOG_PAGE_SIZE = 100
-const LOG_MAX_PAGES = 5
+const LOG_MAX_PAGES = 3
+/** Successful balance results are served from cache for this long. */
+const RESULT_TTL_MS = 60_000
+/** Station units (/api/status) change rarely; cache them longer. */
+const UNITS_TTL_MS = 10 * 60_000
 
 const DEFAULTS = {
   baseURL: DEFAULT_BASE_URL,
   apiKey: '',
   refreshSeconds: 60,
 }
+
+let unitsCache = null
+let resultCache = null
+let inflight = null
 
 /**
  * No `Config` export here, on purpose (see the dsh-relaunch precedent).
@@ -68,6 +82,15 @@ function isNewApiOk(status, body) {
   if (status < 200 || status >= 300) return false
   if (body.success === false || body.code === false) return false
   return true
+}
+
+/**
+ * Only a real HTTP 401/403 means "the key is rejected". A 200 with
+ * success:false (or a 429) is a transient relay/rate-limit problem, and
+ * must never be reported as a bad key.
+ */
+function isAuthFailure(status) {
+  return status === 401 || status === 403
 }
 
 function epochMs(value) {
@@ -140,24 +163,34 @@ async function getJson(origin, path, apiKey, params = {}) {
 
 /** Quota units for this station: GET /api/status (no key). Falls back to 500000 = $1. */
 async function readUnits(origin) {
+  const now = Date.now()
+  if (unitsCache !== null && unitsCache.origin === origin && now - unitsCache.at < UNITS_TTL_MS) {
+    return unitsCache.units
+  }
+  let units
   try {
     const { status, body } = await getJson(origin, '/api/status', undefined)
     const data = body.data ?? body
-    if (!isNewApiOk(status, body)) return { quotaPerUnit: DEFAULT_QUOTA_PER_UNIT }
-    const quotaPerUnit = num(data.quota_per_unit) ?? DEFAULT_QUOTA_PER_UNIT
-    const pricePerUnit = num(data.price)
-    const displayType = typeof data.quota_display_type === 'string' ? data.quota_display_type : undefined
-    const displayCurrency = displayType === 'CNY' || displayType === 'USD' || displayType === '¥' || displayType === '人民币'
-      ? (displayType === '¥' || displayType === '人民币' ? 'CNY' : displayType)
-      : pricePerUnit !== undefined ? 'CNY' : 'USD'
-    return {
-      quotaPerUnit: quotaPerUnit > 0 ? quotaPerUnit : DEFAULT_QUOTA_PER_UNIT,
-      ...(pricePerUnit !== undefined ? { pricePerUnit } : {}),
-      displayCurrency,
+    if (!isNewApiOk(status, body)) {
+      units = { quotaPerUnit: DEFAULT_QUOTA_PER_UNIT }
+    } else {
+      const quotaPerUnit = num(data.quota_per_unit) ?? DEFAULT_QUOTA_PER_UNIT
+      const pricePerUnit = num(data.price)
+      const displayType = typeof data.quota_display_type === 'string' ? data.quota_display_type : undefined
+      const displayCurrency = displayType === 'CNY' || displayType === 'USD' || displayType === '¥' || displayType === '人民币'
+        ? (displayType === '¥' || displayType === '人民币' ? 'CNY' : displayType)
+        : pricePerUnit !== undefined ? 'CNY' : 'USD'
+      units = {
+        quotaPerUnit: quotaPerUnit > 0 ? quotaPerUnit : DEFAULT_QUOTA_PER_UNIT,
+        ...(pricePerUnit !== undefined ? { pricePerUnit } : {}),
+        displayCurrency,
+      }
     }
   } catch {
-    return { quotaPerUnit: DEFAULT_QUOTA_PER_UNIT, displayCurrency: 'USD' }
+    units = { quotaPerUnit: DEFAULT_QUOTA_PER_UNIT, displayCurrency: 'USD' }
   }
+  unitsCache = { origin, at: now, units }
+  return units
 }
 
 /**
@@ -196,15 +229,17 @@ async function readLogWindow(origin, apiKey, fromMs, toMs) {
 }
 
 /**
- * Today's spend window, first working tier wins (copied from
- * gateway-wallet's readWindow): /api/log/self/stat, then /api/data/self,
- * then the /api/log/token walk. Returns { money, requests } or null.
- * Token counts are NOT in the stat/aggregate tiers; use readTodayTokens
- * for those.
+ * Today's spend + tokens. First working tier wins for spend
+ * (/api/log/self/stat, then /api/data/self, then the log walk), and a single
+ * log walk supplies the token count — the walk runs once and its result is
+ * shared, never twice in parallel. Returns { money, requests, tokens } with
+ * undefined/null where a figure could not be read.
  */
-async function readWindow(origin, apiKey, units, fromMs, toMs) {
+async function readToday(origin, apiKey, units, fromMs, toMs) {
   const from = Math.floor(fromMs / 1000)
   const to = Math.floor(toMs / 1000) + 60
+  let money
+  let requests
   try {
     const { status, body } = await getJson(origin, '/api/log/self/stat', apiKey, {
       type: 2, start_timestamp: from, end_timestamp: to,
@@ -213,46 +248,54 @@ async function readWindow(origin, apiKey, units, fromMs, toMs) {
       const data = body.data ?? {}
       const quota = num(data.quota)
       if (quota !== undefined) {
-        const money = quotaToMoney(quota, units)
-        if (money !== undefined) return { money, requests: num(data.count) }
+        money = quotaToMoney(quota, units)
+        requests = num(data.count)
       }
     }
   } catch { /* fall through to the next tier */ }
-  try {
-    const { status, body } = await getJson(origin, '/api/data/self', apiKey, {
-      start_timestamp: from, end_timestamp: to, default_time: 'day',
-    })
-    if (isNewApiOk(status, body)) {
-      const rows = Array.isArray(body.data) ? body.data : []
-      let quota = 0
-      let requests = 0
-      for (const row of rows) {
-        if (row === null || typeof row !== 'object') continue
-        quota += num(row.quota) ?? 0
-        requests += num(row.count) ?? 0
+  if (money === undefined) {
+    try {
+      const { status, body } = await getJson(origin, '/api/data/self', apiKey, {
+        start_timestamp: from, end_timestamp: to, default_time: 'day',
+      })
+      if (isNewApiOk(status, body)) {
+        const rows = Array.isArray(body.data) ? body.data : []
+        let quota = 0
+        let count = 0
+        for (const row of rows) {
+          if (row === null || typeof row !== 'object') continue
+          quota += num(row.quota) ?? 0
+          count += num(row.count) ?? 0
+        }
+        const m = quotaToMoney(quota, units)
+        if (m !== undefined) {
+          money = m
+          requests = count > 0 ? count : undefined
+        }
       }
-      const money = quotaToMoney(quota, units)
-      if (money !== undefined) return { money, requests: requests > 0 ? requests : undefined }
+    } catch { /* fall through to the log walk */ }
+  }
+  const walked = await readLogWindow(origin, apiKey, fromMs, toMs).catch(() => null)
+  let tokens
+  if (walked !== null) {
+    tokens = walked.tokens
+    if (money === undefined) {
+      const m = quotaToMoney(walked.quota, units)
+      if (m !== undefined) {
+        money = m
+        requests = walked.requests
+      }
     }
-  } catch { /* fall through to the next tier */ }
-  const walked = await readLogWindow(origin, apiKey, fromMs, toMs).catch(() => null)
-  if (walked === null) return null
-  const money = quotaToMoney(walked.quota, units)
-  if (money === undefined) return null
-  return { money, requests: walked.requests }
-}
-
-/** Today's token total from the log walk (best-effort; null when incomplete). */
-async function readTodayTokens(origin, apiKey, fromMs, toMs) {
-  const walked = await readLogWindow(origin, apiKey, fromMs, toMs).catch(() => null)
-  if (walked === null) return null
-  return { tokens: walked.tokens, requests: walked.requests }
+    if (requests === undefined) requests = walked.requests
+  }
+  return { money, requests, tokens }
 }
 
 /**
  * Fetch everything the panel shows. Returns the flat JSON envelope the
  * panel consumes; on failure { ok: false, error } with error one of
- * 'no-key' | 'http:<status>' | 'network' | 'unparsed'.
+ * 'no-key' | 'http:401' | 'rate-limited' | 'relay' | 'network' | 'unparsed'
+ * ('relay' carries the relay's own message in `detail` when there is one).
  */
 async function fetchBalance(cfg) {
   const origin = cfg.baseURL
@@ -269,26 +312,29 @@ async function fetchBalance(cfg) {
   let self = null
   let selfStatus = 0
   let selfAuthFailed = false
+  let selfRelayMessage
   let usage = null
   let usageStatus = 0
   let usageAuthFailed = false
+  let usageRelayMessage
   try {
     const r = await getJson(origin, '/api/user/self', apiKey)
     selfStatus = r.status
     if (isNewApiOk(r.status, r.body)) self = r.body.data ?? {}
-    // New API answers a bad key on /api/user/self with HTTP 200 + success:false.
-    else if (r.status === 401 || r.body?.success === false) selfAuthFailed = true
+    // New API answers a bad key on /api/user/self with HTTP 200 + success:false,
+    // but a 200 + success:false can also be a transient relay problem — only
+    // a real HTTP 401/403 means the key itself was rejected.
+    else if (isAuthFailure(r.status)) selfAuthFailed = true
+    else if (typeof r.body?.message === 'string' && r.body.message !== '') selfRelayMessage = r.body.message
   } catch {
     return { ok: false, error: 'network' }
   }
   try {
-    let r = await getJson(origin, '/api/usage/token/', apiKey)
-    if (!isNewApiOk(r.status, r.body)) {
-      r = await getJson(origin, '/api/usage/token', apiKey)
-    }
+    const r = await getJson(origin, '/api/usage/token/', apiKey)
     usageStatus = r.status
     if (isNewApiOk(r.status, r.body)) usage = r.body.data ?? {}
-    else if (r.status === 401 || r.body?.success === false) usageAuthFailed = true
+    else if (isAuthFailure(r.status)) usageAuthFailed = true
+    else if (typeof r.body?.message === 'string' && r.body.message !== '') usageRelayMessage = r.body.message
   } catch {
     usage = null
   }
@@ -296,7 +342,9 @@ async function fetchBalance(cfg) {
   if (self === null && usage === null) {
     if (selfAuthFailed || usageAuthFailed) return { ok: false, error: 'http:401' }
     const status = selfStatus !== 0 ? selfStatus : usageStatus
-    return { ok: false, error: status !== 0 ? `http:${status}` : 'network' }
+    if (status === 429) return { ok: false, error: 'rate-limited' }
+    const detail = selfRelayMessage ?? usageRelayMessage
+    return { ok: false, error: 'relay', ...(detail !== undefined ? { detail } : {}), ...(status !== 0 ? { status } : {}) }
   }
 
   // Primary numbers come from /api/user/self; the per-key ledger is the
@@ -325,13 +373,10 @@ async function fetchBalance(cfg) {
   }
 
   const now = Date.now()
-  const [today, tokens] = await Promise.all([
-    readWindow(origin, apiKey, units, localDayStartMs(now), now).catch(() => null),
-    readTodayTokens(origin, apiKey, localDayStartMs(now), now).catch(() => null),
-  ])
-  const todayUsd = today?.money?.usd ?? today?.money?.display
-  const todayDisplay = today?.money?.display
-  const requestsToday = today?.requests ?? tokens?.requests
+  const today = await readToday(origin, apiKey, units, localDayStartMs(now), now).catch(() => ({ money: undefined, requests: undefined, tokens: undefined }))
+  const todayUsd = today.money?.usd ?? today.money?.display
+  const todayDisplay = today.money?.display
+  const requestsToday = today.requests ?? undefined
   // Display currency comes from the station (/api/status); for spanagent it
   // is CNY with price 1, so the display number equals the USD number and
   // only the symbol differs (¥ vs $).
@@ -351,7 +396,7 @@ async function fetchBalance(cfg) {
     ...(requestCount !== undefined ? { requestCount } : {}),
     ...(requestsToday !== undefined ? { requestsToday } : {}),
     ...(requestCount !== undefined ? { requestsTotal: requestCount } : {}),
-    ...(tokens !== null && tokens !== undefined ? { tokensToday: tokens.tokens } : { tokensToday: null }),
+    ...(today.tokens !== undefined ? { tokensToday: today.tokens } : { tokensToday: null }),
     tokensTotal: null,
     unlimited,
     ...(expiresAt !== undefined ? { expiresAt } : {}),
@@ -428,9 +473,22 @@ export function apply(ctx, config = {}) {
           return
         }
         try {
-          const result = await fetchBalance(cfg)
+          // Serve a fresh successful result from cache, and share one
+          // in-flight fetch between concurrent callers (panel + rail icon).
+          const now = Date.now()
+          if (resultCache !== null && now - resultCache.at < RESULT_TTL_MS) {
+            send(200, { ...resultCache.body, refreshSeconds: cfg.refreshSeconds })
+            return
+          }
+          if (inflight === null) {
+            inflight = fetchBalance(cfg).catch(() => ({ ok: false, error: 'network' }))
+          }
+          const result = await inflight
+          inflight = null
+          if (result.ok === true) resultCache = { at: Date.now(), body: result }
           send(200, { ...result, refreshSeconds: cfg.refreshSeconds })
         } catch (error) {
+          inflight = null
           send(200, { ok: false, error: 'network', refreshSeconds: cfg.refreshSeconds })
         }
       },
