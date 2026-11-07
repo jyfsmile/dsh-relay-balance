@@ -434,6 +434,17 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-primary)',
         outline: 'none',
       }
+      const manualButtonStyle = {
+        padding: '6px 12px',
+        fontSize: '12px',
+        fontWeight: 500,
+        borderRadius: '999px',
+        border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
+        background: 'var(--dsw-alias-button-elevated-fill, rgba(128,128,128,0.08))',
+        color: 'var(--dsw-alias-label-primary)',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+      }
 
       const refreshButton = h(
         'button',
@@ -472,6 +483,50 @@ window.__ModuleLoader__.load({
         ? null
         : h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary))' } },
             `${text(translate, 'panel.updated')} ${fmtAgo(updatedAt, translate)}`)
+
+      // Panel-entered relay address / key: saved in local storage and sent
+      // to the Host as headers, so another key can be checked without
+      // editing the config file or restarting DSH. This section lives at
+      // panel level (not inside the data branch) so the address and key can
+      // still be entered or corrected when the panel is showing an error or
+      // the "no API key" empty state.
+      const overrideSection = h(
+        'div',
+        { style: { ...cardStyle, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' } },
+        h('span', { style: labelStyle }, text(translate, 'panel.overrideTitle')),
+        h('input', {
+          type: 'url',
+          inputMode: 'url',
+          value: overrideBaseInput,
+          placeholder: 'https://spanagent.xyz',
+          onChange: (event) => setOverrideBaseInput(event.target.value),
+          style: { ...fieldStyle, width: '100%', boxSizing: 'border-box' },
+        }),
+        h('input', {
+          type: 'password',
+          value: overrideKeyInput,
+          placeholder: 'sk-...',
+          autoComplete: 'off',
+          onChange: (event) => setOverrideKeyInput(event.target.value),
+          style: { ...fieldStyle, width: '100%', boxSizing: 'border-box' },
+        }),
+        h(
+          'div',
+          { style: { display: 'flex', gap: '8px' } },
+          h('button', { type: 'button', onClick: saveOverride, style: manualButtonStyle },
+            text(translate, 'panel.overrideSave')),
+          override !== null
+            ? h('button', { type: 'button', onClick: clearOverride, style: manualButtonStyle },
+                text(translate, 'panel.overrideClear'))
+            : null,
+        ),
+        h('div', { style: { fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' } },
+          text(translate, 'panel.overrideHint')),
+        override !== null
+          ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+              text(translate, 'panel.overrideActive'))
+          : null,
+      )
 
       const body = (() => {
         if (loading && data === null && error === null) {
@@ -664,17 +719,6 @@ window.__ModuleLoader__.load({
 
         // Manual balance: an input for the total topped-up amount, saved in
         // local storage. Remaining = manual total − total used.
-        const manualButtonStyle = {
-          padding: '6px 12px',
-          fontSize: '12px',
-          fontWeight: 500,
-          borderRadius: '999px',
-          border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
-          background: 'var(--dsw-alias-button-elevated-fill, rgba(128,128,128,0.08))',
-          color: 'var(--dsw-alias-label-primary)',
-          cursor: 'pointer',
-          whiteSpace: 'nowrap',
-        }
         const manualSection = h(
           'div',
           { style: { ...cardStyle, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' } },
@@ -710,52 +754,10 @@ window.__ModuleLoader__.load({
             : null,
         )
 
-        // Panel-entered relay address / key: saved in local storage and sent
-        // to the Host as headers, so another key can be checked without
-        // editing the config file or restarting DSH.
-        const overrideSection = h(
-          'div',
-          { style: { ...cardStyle, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' } },
-          h('span', { style: labelStyle }, text(translate, 'panel.overrideTitle')),
-          h('input', {
-            type: 'url',
-            inputMode: 'url',
-            value: overrideBaseInput,
-            placeholder: 'https://spanagent.xyz',
-            onChange: (event) => setOverrideBaseInput(event.target.value),
-            style: { ...fieldStyle, width: '100%', boxSizing: 'border-box' },
-          }),
-          h('input', {
-            type: 'password',
-            value: overrideKeyInput,
-            placeholder: 'sk-...',
-            autoComplete: 'off',
-            onChange: (event) => setOverrideKeyInput(event.target.value),
-            style: { ...fieldStyle, width: '100%', boxSizing: 'border-box' },
-          }),
-          h(
-            'div',
-            { style: { display: 'flex', gap: '8px' } },
-            h('button', { type: 'button', onClick: saveOverride, style: manualButtonStyle },
-              text(translate, 'panel.overrideSave')),
-            override !== null
-              ? h('button', { type: 'button', onClick: clearOverride, style: manualButtonStyle },
-                  text(translate, 'panel.overrideClear'))
-              : null,
-          ),
-          h('div', { style: { fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' } },
-            text(translate, 'panel.overrideHint')),
-          override !== null
-            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
-                text(translate, 'panel.overrideActive'))
-            : null,
-        )
-
         return h(
           'div',
           { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
           hero,
-          overrideSection,
           manualSection,
           grid,
           meta,
@@ -767,6 +769,7 @@ window.__ModuleLoader__.load({
         { style: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' } },
         header,
         body,
+        overrideSection,
         footer,
       )
     }
