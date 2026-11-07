@@ -31,6 +31,12 @@
  * refresh (`?fresh=1`) bypasses the 30s cache, so the button always reads
  * the relay live; the auto path stays on the cache to keep request volume
  * low (about one relay round-trip every 30s while the panel is open).
+ * The panel may override the relay address and key per request with the
+ * X-Relay-Base-URL / X-Relay-Key headers; the override applies to that
+ * fetch only and the cache is keyed by the effective credentials. An
+ * overridden key only changes which account is queried — the account
+ * ledger always wins over one key's own figures, so other keys' usage
+ * stays counted in.
  */
 
 const ROUTE_PATH = '/dsh-relay-balance/balance'
@@ -385,6 +391,10 @@ async function fetchBalance(cfg) {
   const neverExpires = expiresRaw === 0 || expiresRaw === -1
   const modelLimits = usage !== null ? parseModelLimits(usage) : undefined
 
+  // The account ledger (/api/user/self) always wins: the panel shows the
+  // account's remaining balance and total used, not one key's own figures.
+  // The per-key ledger is only the fallback when the account ledger is
+  // unavailable, so other keys' usage is counted in.
   const balanceQuota = quota ?? (available ?? (granted !== undefined && usedByKey !== undefined ? granted - usedByKey : undefined))
   const usedQuotaFinal = usedQuota ?? usedByKey
   // An unlimited key still draws from a finite account balance: show the
@@ -505,17 +515,35 @@ export function apply(ctx, config = {}) {
           try {
             fresh = new URL(req.url, 'http://127.0.0.1').searchParams.get('fresh') === '1'
           } catch { fresh = false }
+          // Panel override: the panel may supply its own relay address and
+          // key in headers (same-origin, loopback-only route). The override
+          // applies to this fetch only; the cache is keyed by the effective
+          // credentials so two keys never share a result.
+          const overrideBase = typeof req.headers['x-relay-base-url'] === 'string' ? req.headers['x-relay-base-url'].trim() : ''
+          const overrideKey = typeof req.headers['x-relay-key'] === 'string' ? req.headers['x-relay-key'].trim() : ''
+          let effBase = cfg.baseURL
+          if (overrideBase !== '') {
+            try {
+              const parsed = new URL(overrideBase)
+              if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+                effBase = overrideBase.replace(/\/+$/, '')
+              }
+            } catch { /* keep the configured baseURL */ }
+          }
+          const effKey = overrideKey !== '' ? overrideKey : cfg.apiKey
+          const effCfg = { ...cfg, baseURL: effBase, apiKey: effKey }
+          const cacheKey = `${effBase}\n${effKey}`
           const now = Date.now()
-          if (!fresh && resultCache !== null && now - resultCache.at < RESULT_TTL_MS) {
+          if (!fresh && resultCache !== null && resultCache.key === cacheKey && now - resultCache.at < RESULT_TTL_MS) {
             send(200, { ...resultCache.body, refreshSeconds: cfg.refreshSeconds })
             return
           }
-          if (inflight === null) {
-            inflight = fetchBalance(cfg).catch(() => ({ ok: false, error: 'network' }))
+          if (inflight === null || inflight.key !== cacheKey) {
+            inflight = { key: cacheKey, promise: fetchBalance(effCfg).catch(() => ({ ok: false, error: 'network' })) }
           }
-          const result = await inflight
-          inflight = null
-          if (result.ok === true) resultCache = { at: Date.now(), body: result }
+          const result = await inflight.promise
+          if (inflight.key === cacheKey) inflight = null
+          if (result.ok === true) resultCache = { key: cacheKey, at: Date.now(), body: result }
           send(200, { ...result, refreshSeconds: cfg.refreshSeconds })
         } catch (error) {
           inflight = null

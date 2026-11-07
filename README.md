@@ -83,6 +83,22 @@ no restart. It has to be re-entered on another machine or after clearing
 browser data. The rail icon's low-balance red dot still follows the balance
 the relay reports.
 
+## Enter the relay address and key in the panel
+
+The panel lets you enter a relay address and API key directly — no config
+edit, no restart. Save it and the panel reads that key's data. With a key
+entered, the panel shows the account's remaining balance and total used
+(`quota` / `used_quota`) for that key, so other keys' usage is counted in —
+the key is only the credential used to query; the numbers shown are always
+the account's. Leave both fields empty and clear to go back to the key from
+the config.
+
+The address and key are stored in the panel's local storage and sent only
+to the Host on your own machine. They have to be re-entered on another
+machine or after clearing browser data. The manual total should be that
+account's total top-up, so "manual total − total used" is the account's
+remaining balance.
+
 ## Version note
 
 Works on **DSH >= 0.1.7-rc.2, including 0.2.2-rc.1**. The plugin declares
@@ -102,6 +118,9 @@ hands it plus Node globals, so nothing can version-lock it.
   30s (configurable); the manual refresh button always reads the relay live
   (it bypasses the Host's 30s cache), and the footer shows the reading's age
   in seconds, so you can see the number is live. Empty state when no key is set.
+  An address and key entered in the panel travel to the Host in request
+  headers (`X-Relay-Base-URL` / `X-Relay-Key`) and apply to that fetch only;
+  they are never written to the config file.
 
 ## Limitations
 

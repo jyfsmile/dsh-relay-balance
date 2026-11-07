@@ -75,6 +75,13 @@ window.__ModuleLoader__.load({
         'panel.manualPlaceholder': 'e.g. 500',
         'panel.manualSave': 'Save',
         'panel.manualTitle': 'Manual balance',
+        'panel.overrideActive': 'Using the key entered here',
+        'panel.overrideApiKey': 'API Key',
+        'panel.overrideBaseURL': 'API address',
+        'panel.overrideClear': 'Clear',
+        'panel.overrideHint': 'Check another relay address or key here without editing the config file. The panel then shows the account’s remaining balance and total used for that key. Leave both fields empty to use the config.',
+        'panel.overrideSave': 'Save',
+        'panel.overrideTitle': 'Relay connection',
         'panel.unlimited': 'Unlimited quota',
         'panel.unlimitedNote': 'This key has no quota limit',
         'panel.subRequestsTotal': 'Total {n} requests',
@@ -119,6 +126,13 @@ window.__ModuleLoader__.load({
         'panel.manualPlaceholder': '例如 500',
         'panel.manualSave': '保存',
         'panel.manualTitle': '手动剩余额度',
+        'panel.overrideActive': '正在使用这里填的 Key',
+        'panel.overrideApiKey': 'API Key',
+        'panel.overrideBaseURL': 'API 地址',
+        'panel.overrideClear': '清除',
+        'panel.overrideHint': '在这里填另一个中转站地址 / Key 来查看，不用改配置文件。填了之后面板显示该 Key 所属账号的剩余额度与累计已用。两项都留空就用配置里的。',
+        'panel.overrideSave': '保存',
+        'panel.overrideTitle': '中转站连接',
         'panel.unlimited': '额度不限',
         'panel.unlimitedNote': '此 Key 额度不限',
         'panel.subRequestsTotal': '累计 {n} 次请求',
@@ -212,6 +226,43 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** The panel-entered relay address / key, also in local storage. */
+    const OVERRIDE_KEY = 'dsh-relay-balance:override'
+
+    function readOverride() {
+      try {
+        const raw = window.localStorage.getItem(OVERRIDE_KEY)
+        if (raw === null) return null
+        const parsed = JSON.parse(raw)
+        if (parsed === null || typeof parsed !== 'object') return null
+        const baseURL = typeof parsed.baseURL === 'string' ? parsed.baseURL.trim() : ''
+        const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : ''
+        if (baseURL === '' && apiKey === '') return null
+        return { baseURL, apiKey }
+      } catch {
+        return null
+      }
+    }
+
+    function writeOverride(value) {
+      try {
+        if (value === null) window.localStorage.removeItem(OVERRIDE_KEY)
+        else window.localStorage.setItem(OVERRIDE_KEY, JSON.stringify(value))
+      } catch {
+        // Storage may be unavailable; the panel simply uses the config key.
+      }
+    }
+
+    /** Headers carrying the panel-entered relay address / key, if any. */
+    function overrideHeaders() {
+      const ov = readOverride()
+      if (ov === null) return {}
+      const headers = {}
+      if (ov.baseURL !== '') headers['X-Relay-Base-URL'] = ov.baseURL
+      if (ov.apiKey !== '') headers['X-Relay-Key'] = ov.apiKey
+      return headers
+    }
+
     /**
      * The wallet glyph for the rail. Polls the same route on its own so the
      * red low-balance dot is visible even when the panel is closed.
@@ -223,7 +274,7 @@ window.__ModuleLoader__.load({
         let alive = true
         const check = async () => {
           try {
-            const response = await fetch(ROUTE)
+            const response = await fetch(ROUTE, { headers: overrideHeaders() })
             const data = await response.json().catch(() => ({}))
             if (alive && data && data.ok === true && typeof data.balanceUsd === 'number') {
               setLow(data.balanceUsd < LOW_BALANCE_USD)
@@ -290,6 +341,9 @@ window.__ModuleLoader__.load({
         const initial = readManualBase()
         return initial === null ? '' : String(initial)
       })
+      const [override, setOverride] = React.useState(() => readOverride())
+      const [overrideBaseInput, setOverrideBaseInput] = React.useState(() => readOverride()?.baseURL ?? '')
+      const [overrideKeyInput, setOverrideKeyInput] = React.useState(() => readOverride()?.apiKey ?? '')
 
       // fresh=true asks the Host for a live relay read, bypassing its 30s
       // cache (the manual refresh / retry buttons). The auto path calls
@@ -297,7 +351,7 @@ window.__ModuleLoader__.load({
       const load = React.useCallback(async (fresh = false) => {
         setLoading(true)
         try {
-          const response = await fetch(fresh ? `${ROUTE}?fresh=1` : ROUTE)
+          const response = await fetch(fresh ? `${ROUTE}?fresh=1` : ROUTE, { headers: overrideHeaders() })
           const body = await response.json().catch(() => ({}))
           if (body && body.ok === true) {
             setData(body)
@@ -336,6 +390,24 @@ window.__ModuleLoader__.load({
         writeManualBase(null)
       }
 
+      const saveOverride = () => {
+        const baseURL = overrideBaseInput.trim()
+        const apiKey = overrideKeyInput.trim()
+        if (baseURL !== '' && !/^https?:\/\//i.test(baseURL)) return
+        const next = baseURL === '' && apiKey === '' ? null : { baseURL, apiKey }
+        setOverride(next)
+        writeOverride(next)
+        load(true)
+      }
+
+      const clearOverride = () => {
+        setOverride(null)
+        setOverrideBaseInput('')
+        setOverrideKeyInput('')
+        writeOverride(null)
+        load(true)
+      }
+
       // Auto-refresh, cleaned up on unmount; the interval follows the
       // refreshSeconds the Host route reports (default 30s).
       React.useEffect(() => {
@@ -352,6 +424,16 @@ window.__ModuleLoader__.load({
       }
       const labelStyle = { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' }
       const valueStyle = { fontSize: '16px', fontWeight: 600, lineHeight: 1.3, color: 'var(--dsw-alias-label-primary)' }
+      const fieldStyle = {
+        minWidth: 0,
+        padding: '6px 10px',
+        fontSize: '13px',
+        borderRadius: '8px',
+        border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
+        background: 'var(--dsw-alias-bg-base, transparent)',
+        color: 'var(--dsw-alias-label-primary)',
+        outline: 'none',
+      }
 
       const refreshButton = h(
         'button',
@@ -608,17 +690,7 @@ window.__ModuleLoader__.load({
               value: manualInput,
               placeholder: text(translate, 'panel.manualPlaceholder'),
               onChange: (event) => setManualInput(event.target.value),
-              style: {
-                flex: 1,
-                minWidth: 0,
-                padding: '6px 10px',
-                fontSize: '13px',
-                borderRadius: '8px',
-                border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
-                background: 'var(--dsw-alias-bg-base, transparent)',
-                color: 'var(--dsw-alias-label-primary)',
-                outline: 'none',
-              },
+              style: { ...fieldStyle, flex: 1 },
             }),
             h('button', { type: 'button', onClick: saveManualBase, style: manualButtonStyle },
               text(translate, 'panel.manualSave')),
@@ -638,10 +710,52 @@ window.__ModuleLoader__.load({
             : null,
         )
 
+        // Panel-entered relay address / key: saved in local storage and sent
+        // to the Host as headers, so another key can be checked without
+        // editing the config file or restarting DSH.
+        const overrideSection = h(
+          'div',
+          { style: { ...cardStyle, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' } },
+          h('span', { style: labelStyle }, text(translate, 'panel.overrideTitle')),
+          h('input', {
+            type: 'url',
+            inputMode: 'url',
+            value: overrideBaseInput,
+            placeholder: 'https://spanagent.xyz',
+            onChange: (event) => setOverrideBaseInput(event.target.value),
+            style: { ...fieldStyle, width: '100%', boxSizing: 'border-box' },
+          }),
+          h('input', {
+            type: 'password',
+            value: overrideKeyInput,
+            placeholder: 'sk-...',
+            autoComplete: 'off',
+            onChange: (event) => setOverrideKeyInput(event.target.value),
+            style: { ...fieldStyle, width: '100%', boxSizing: 'border-box' },
+          }),
+          h(
+            'div',
+            { style: { display: 'flex', gap: '8px' } },
+            h('button', { type: 'button', onClick: saveOverride, style: manualButtonStyle },
+              text(translate, 'panel.overrideSave')),
+            override !== null
+              ? h('button', { type: 'button', onClick: clearOverride, style: manualButtonStyle },
+                  text(translate, 'panel.overrideClear'))
+              : null,
+          ),
+          h('div', { style: { fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' } },
+            text(translate, 'panel.overrideHint')),
+          override !== null
+            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+                text(translate, 'panel.overrideActive'))
+            : null,
+        )
+
         return h(
           'div',
           { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
           hero,
+          overrideSection,
           manualSection,
           grid,
           meta,
