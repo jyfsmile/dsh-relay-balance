@@ -70,10 +70,15 @@ window.__ModuleLoader__.load({
         'panel.errorNoKey': 'No API key configured.',
         'panel.lowBalance': 'Balance is low (under $1).',
         'panel.unlimited': 'Unlimited quota',
+        'panel.unlimitedNote': 'This key has no quota limit',
+        'panel.subRequestsTotal': 'Total {n} requests',
+        'panel.subRequestsToday': '{n} requests today',
+        'panel.subPerMillion': '{money} per 1M tokens',
         'panel.expires': 'Expires',
         'panel.neverExpires': 'Never expires',
         'panel.models': 'Models',
         'panel.justNow': 'just now',
+        'panel.secondsAgo': '{n}s ago',
         'panel.minutesAgo': '{n} min ago',
         'panel.hoursAgo': '{n} h ago',
         'panel.notAvailable': '—',
@@ -103,10 +108,15 @@ window.__ModuleLoader__.load({
         'panel.errorNoKey': '还没有填 API Key。',
         'panel.lowBalance': '余额偏低（低于 $1）。',
         'panel.unlimited': '额度不限',
+        'panel.unlimitedNote': '此 Key 额度不限',
+        'panel.subRequestsTotal': '累计 {n} 次请求',
+        'panel.subRequestsToday': '今日 {n} 次请求',
+        'panel.subPerMillion': '每百万 token {money}',
         'panel.expires': '到期',
         'panel.neverExpires': '永不过期',
         'panel.models': '可用模型',
         'panel.justNow': '刚刚',
+        'panel.secondsAgo': '{n} 秒前',
         'panel.minutesAgo': '{n} 分钟前',
         'panel.hoursAgo': '{n} 小时前',
         'panel.notAvailable': '—',
@@ -152,7 +162,9 @@ window.__ModuleLoader__.load({
     function fmtAgo(ms, translate) {
       if (ms === null || ms === undefined) return text(translate, 'panel.notAvailable')
       const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000))
-      if (seconds < 60) return text(translate, 'panel.justNow')
+      // Seconds, not "just now": the footer is how the user sees the number
+      // is live, so show the real age of the reading.
+      if (seconds < 60) return text(translate, 'panel.secondsAgo', { n: seconds })
       const minutes = Math.floor(seconds / 60)
       if (minutes < 60) return text(translate, 'panel.minutesAgo', { n: minutes })
       const hours = Math.floor(minutes / 60)
@@ -237,12 +249,15 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState(null)
       const [detail, setDetail] = React.useState(null)
       const [updatedAt, setUpdatedAt] = React.useState(null)
-      const [refreshSeconds, setRefreshSeconds] = React.useState(60)
+      const [refreshSeconds, setRefreshSeconds] = React.useState(30)
 
-      const load = React.useCallback(async () => {
+      // fresh=true asks the Host for a live relay read, bypassing its 30s
+      // cache (the manual refresh / retry buttons). The auto path calls
+      // load() with no argument and stays on the cache.
+      const load = React.useCallback(async (fresh = false) => {
         setLoading(true)
         try {
-          const response = await fetch(ROUTE)
+          const response = await fetch(fresh ? `${ROUTE}?fresh=1` : ROUTE)
           const body = await response.json().catch(() => ({}))
           if (body && body.ok === true) {
             setData(body)
@@ -268,7 +283,7 @@ window.__ModuleLoader__.load({
       }, [])
 
       // Auto-refresh, cleaned up on unmount; the interval follows the
-      // refreshSeconds the Host route reports (default 60s).
+      // refreshSeconds the Host route reports (default 30s).
       React.useEffect(() => {
         load()
         const timer = setInterval(load, refreshSeconds * 1000)
@@ -289,7 +304,7 @@ window.__ModuleLoader__.load({
         {
           type: 'button',
           disabled: loading,
-          onClick: load,
+          onClick: () => load(true),
           style: {
             display: 'inline-flex',
             alignItems: 'center',
@@ -364,7 +379,7 @@ window.__ModuleLoader__.load({
             h('button',
               {
                 type: 'button',
-                onClick: load,
+                onClick: () => load(true),
                 style: {
                   alignSelf: 'flex-start',
                   padding: '6px 14px',
@@ -383,9 +398,12 @@ window.__ModuleLoader__.load({
         if (data === null) return null
 
         const isLow = typeof data.balanceUsd === 'number' && data.balanceUsd < LOW_BALANCE_USD
-        const balanceText = data.unlimited === true
-          ? text(translate, 'panel.unlimited')
-          : fmtMoney(data.balanceDisplay ?? data.balanceUsd, data.currency)
+        const hasBalance = data.balanceUsd !== undefined && data.balanceUsd !== null
+        const balanceText = hasBalance
+          ? fmtMoney(data.balanceDisplay ?? data.balanceUsd, data.currency)
+          : data.unlimited === true
+            ? text(translate, 'panel.unlimited')
+            : '—'
 
         // Hero: balance on a card, with a blue ¥ chip and the key hint.
         const hero = h(
@@ -427,6 +445,10 @@ window.__ModuleLoader__.load({
                 : 'var(--dsw-alias-label-primary)',
             },
           }, balanceText),
+          data.unlimited === true && hasBalance
+            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+                text(translate, 'panel.unlimitedNote'))
+            : null,
           isLow
             ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-state-error-primary, #d33)' } },
                 text(translate, 'panel.lowBalance'))
@@ -437,27 +459,44 @@ window.__ModuleLoader__.load({
             : null,
         )
 
-        // 2x2 stat grid, same card chrome as the hero.
+        // 2x2 stat grid, same card chrome as the hero. Each card carries a
+        // small sub-line under the number (the reference usage page does the
+        // same: the second line gives the number its context).
+        const perMillion = typeof data.todayUsd === 'number' && typeof data.tokensToday === 'number' && data.tokensToday > 0
+          ? data.todayUsd / data.tokensToday * 1e6
+          : undefined
         const stats = [
-          [text(translate, 'panel.used'), fmtMoney(data.usedDisplay ?? data.usedUsd, data.currency)],
-          [text(translate, 'panel.today'), fmtMoney(data.todayDisplay ?? data.todayUsd, data.currency)],
-          [text(translate, 'panel.requestsToday'), fmtNum(data.requestsToday)],
-          [text(translate, 'panel.tokensToday'), fmtNum(data.tokensToday)],
+          [text(translate, 'panel.used'), fmtMoney(data.usedDisplay ?? data.usedUsd, data.currency),
+            typeof data.requestsTotal === 'number'
+              ? text(translate, 'panel.subRequestsTotal', { n: fmtNum(data.requestsTotal) })
+              : null],
+          [text(translate, 'panel.today'), fmtMoney(data.todayDisplay ?? data.todayUsd, data.currency),
+            typeof data.requestsToday === 'number'
+              ? text(translate, 'panel.subRequestsToday', { n: fmtNum(data.requestsToday) })
+              : null],
+          [text(translate, 'panel.requestsToday'), fmtNum(data.requestsToday), null],
+          [text(translate, 'panel.tokensToday'), fmtNum(data.tokensToday),
+            perMillion !== undefined
+              ? text(translate, 'panel.subPerMillion', { money: fmtMoney(perMillion, data.currency) })
+              : null],
         ]
         const grid = h(
           'div',
           { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' } },
-          stats.map(([label, value]) => h(
+          stats.map(([label, value, sub]) => h(
             'div',
             { key: label, style: { ...cardStyle, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '2px' } },
             h('span', { style: labelStyle }, label),
             h('span', { style: valueStyle }, value),
+            sub !== null
+              ? h('span', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } }, sub)
+              : null,
           )),
         )
 
-        // Small meta rows under the grid: total requests, expiry, models.
+        // Small meta rows under the grid: expiry, models. (Total requests
+        // moved into the "Total used" card as its sub-line.)
         const metaRows = []
-        metaRows.push([text(translate, 'panel.requestsTotal'), fmtNum(data.requestsTotal)])
         if (data.neverExpires === true) {
           metaRows.push([text(translate, 'panel.expires'), text(translate, 'panel.neverExpires')])
         } else if (data.expiresAt !== undefined) {

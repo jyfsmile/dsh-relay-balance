@@ -56,7 +56,7 @@ Add (or replace) the plugin row with a `config:` block:
       config:
         baseURL: 'https://spanagent.xyz'
         apiKey: 'sk-your-key-here'
-        refreshSeconds: 60
+        refreshSeconds: 30
 ```
 
 - `baseURL` — the relay's base URL (default `https://spanagent.xyz`).
@@ -64,7 +64,7 @@ Add (or replace) the plugin row with a `config:` block:
   `Authorization: Bearer` header, from the Host process. It is never logged,
   never returned to the browser, and never leaves your machine except to the
   relay itself.
-- `refreshSeconds` — auto-refresh interval for the panel, default 60,
+- `refreshSeconds` — auto-refresh interval for the panel, default 30,
   minimum 10.
 
 After editing, **fully quit DSH (tray included) and restart**. The panel
@@ -86,7 +86,9 @@ hands it plus Node globals, so nothing can version-lock it.
   the response (only a masked hint like `sk-••••abcd`).
 - **Client** (`client.js`): the sidebar rail entry + panel. It only fetches
   the same-origin route — never the relay, never the key. Auto-refresh every
-  60s (configurable), manual refresh button, empty state when no key is set.
+  30s (configurable); the manual refresh button always reads the relay live
+  (it bypasses the Host's 30s cache), and the footer shows the reading's age
+  in seconds, so you can see the number is live. Empty state when no key is set.
 
 ## Limitations
 

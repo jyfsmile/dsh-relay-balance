@@ -25,9 +25,12 @@
  *
  * Request discipline (the relay rate-limits bursts, and a burst used to make
  * the panel flap between working and HTTP 401): a successful balance result
- * is cached for 60s, concurrent route calls share one in-flight fetch, the
+ * is cached for 30s, concurrent route calls share one in-flight fetch, the
  * station's /api/status is cached for 10 minutes, and today's numbers come
- * from a single log walk (max 3 pages) shared by spend and tokens.
+ * from a single log walk (max 3 pages) shared by spend and tokens. A manual
+ * refresh (`?fresh=1`) bypasses the 30s cache, so the button always reads
+ * the relay live; the auto path stays on the cache to keep request volume
+ * low (about one relay round-trip every 30s while the panel is open).
  */
 
 const ROUTE_PATH = '/dsh-relay-balance/balance'
@@ -37,14 +40,14 @@ const TIMEOUT_MS = 15000
 const LOG_PAGE_SIZE = 100
 const LOG_MAX_PAGES = 3
 /** Successful balance results are served from cache for this long. */
-const RESULT_TTL_MS = 60_000
+const RESULT_TTL_MS = 30_000
 /** Station units (/api/status) change rarely; cache them longer. */
 const UNITS_TTL_MS = 10 * 60_000
 
 const DEFAULTS = {
   baseURL: DEFAULT_BASE_URL,
   apiKey: '',
-  refreshSeconds: 60,
+  refreshSeconds: 30,
 }
 
 let unitsCache = null
@@ -320,7 +323,17 @@ async function fetchBalance(cfg) {
   try {
     const r = await getJson(origin, '/api/user/self', apiKey)
     selfStatus = r.status
-    if (isNewApiOk(r.status, r.body)) self = r.body.data ?? {}
+    if (isNewApiOk(r.status, r.body)) {
+      const data = r.body.data ?? r.body
+      // Only accept the payload when it actually carries user fields; a 200
+      // with an empty body (some stations answer API-key calls with a login
+      // page) must not masquerade as data.
+      if (data !== null && typeof data === 'object' && !Array.isArray(data)
+        && (num(data.quota) !== undefined || num(data.used_quota) !== undefined
+          || num(data.request_count) !== undefined || typeof data.username === 'string')) {
+        self = data
+      }
+    }
     // New API answers a bad key on /api/user/self with HTTP 200 + success:false,
     // but a 200 + success:false can also be a transient relay problem — only
     // a real HTTP 401/403 means the key itself was rejected.
@@ -332,7 +345,15 @@ async function fetchBalance(cfg) {
   try {
     const r = await getJson(origin, '/api/usage/token/', apiKey)
     usageStatus = r.status
-    if (isNewApiOk(r.status, r.body)) usage = r.body.data ?? {}
+    if (isNewApiOk(r.status, r.body)) {
+      const data = r.body.data ?? r.body
+      if (data !== null && typeof data === 'object' && !Array.isArray(data)
+        && (num(data.total_granted) !== undefined || num(data.total_used) !== undefined
+          || num(data.total_available) !== undefined || data.unlimited_quota === true
+          || typeof data.name === 'string' || num(data.expires_at) !== undefined)) {
+        usage = data
+      }
+    }
     else if (isAuthFailure(r.status)) usageAuthFailed = true
     else if (typeof r.body?.message === 'string' && r.body.message !== '') usageRelayMessage = r.body.message
   } catch {
@@ -366,7 +387,10 @@ async function fetchBalance(cfg) {
 
   const balanceQuota = quota ?? (available ?? (granted !== undefined && usedByKey !== undefined ? granted - usedByKey : undefined))
   const usedQuotaFinal = usedQuota ?? usedByKey
-  const balance = unlimited ? undefined : quotaToMoney(balanceQuota, units)
+  // An unlimited key still draws from a finite account balance: show the
+  // account balance whenever /api/user/self provides one. Only when there is
+  // genuinely no number does the panel fall back to "unlimited".
+  const balance = quotaToMoney(balanceQuota, units)
   const used = quotaToMoney(usedQuotaFinal, units)
   if (balance === undefined && used === undefined && !unlimited) {
     return { ok: false, error: 'unparsed' }
@@ -475,8 +499,14 @@ export function apply(ctx, config = {}) {
         try {
           // Serve a fresh successful result from cache, and share one
           // in-flight fetch between concurrent callers (panel + rail icon).
+          // `?fresh=1` (the panel's manual refresh button) skips the cache
+          // read, so the button always returns a live relay read.
+          let fresh = false
+          try {
+            fresh = new URL(req.url, 'http://127.0.0.1').searchParams.get('fresh') === '1'
+          } catch { fresh = false }
           const now = Date.now()
-          if (resultCache !== null && now - resultCache.at < RESULT_TTL_MS) {
+          if (!fresh && resultCache !== null && now - resultCache.at < RESULT_TTL_MS) {
             send(200, { ...resultCache.body, refreshSeconds: cfg.refreshSeconds })
             return
           }

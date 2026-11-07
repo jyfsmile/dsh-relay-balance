@@ -55,14 +55,14 @@ API Key **不是**在 DSH 界面里填的。它写在 desktop profile 的 patch 
       config:
         baseURL: 'https://spanagent.xyz'
         apiKey: 'sk-your-key-here'
-        refreshSeconds: 60
+        refreshSeconds: 30
 ```
 
 - `baseURL` — 中转站地址（默认 `https://spanagent.xyz`）。
 - `apiKey` — 你的中转站 API Key。只在 Host 进程里用，以
   `Authorization: Bearer` 请求头发送给中转站。不会记日志、不会返回给
   浏览器、除了中转站本身不会离开你的电脑。
-- `refreshSeconds` — 面板自动刷新间隔，默认 60 秒，最小 10 秒。
+- `refreshSeconds` — 面板自动刷新间隔，默认 30 秒，最小 10 秒。
 
 改完后**彻底退出 DSH（托盘也要退出）再重启**。没填 Key 之前，面板会
 显示"还没有填 API Key"。
@@ -81,8 +81,9 @@ API Key **不是**在 DSH 界面里填的。它写在 desktop profile 的 patch 
   仅限本机访问、仅限 GET。用配置好的 Key 读中转站，返回一个扁平的 JSON
   汇总。响应里永远没有 Key（只有 `sk-••••abcd` 这样的掩码提示）。
 - **Client**（`client.js`）：边栏入口 + 面板。只请求同源路由——不直接
-  连中转站、不碰 Key。每 60 秒自动刷新（可配置），有手动刷新按钮，没填
-  Key 时显示空状态。
+  连中转站、不碰 Key。每 30 秒自动刷新（可配置）；手动点刷新会绕开
+  Host 的 30 秒缓存、直接读中转站实时数，底部会显示这次数的"更新于 x 秒
+  前"，能看到数字是活的。没填 Key 时显示空状态。
 
 ## 限制
 
