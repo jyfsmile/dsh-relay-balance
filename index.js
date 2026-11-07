@@ -520,7 +520,17 @@ export function apply(ctx, config = {}) {
           // applies to this fetch only; the cache is keyed by the effective
           // credentials so two keys never share a result.
           const overrideBase = typeof req.headers['x-relay-base-url'] === 'string' ? req.headers['x-relay-base-url'].trim() : ''
-          const overrideKey = typeof req.headers['x-relay-key'] === 'string' ? req.headers['x-relay-key'].trim() : ''
+          let overrideKey = typeof req.headers['x-relay-key'] === 'string' ? req.headers['x-relay-key'].trim() : ''
+          // Strip surrounding quotes if the key was pasted with them
+          // ("sk-..." / 'sk-...'): the relay would reject the quotes as part
+          // of the key.
+          if (overrideKey.length >= 2) {
+            const first = overrideKey[0]
+            const last = overrideKey[overrideKey.length - 1]
+            if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+              overrideKey = overrideKey.slice(1, -1).trim()
+            }
+          }
           let effBase = cfg.baseURL
           if (overrideBase !== '') {
             try {

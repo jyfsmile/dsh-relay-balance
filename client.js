@@ -392,7 +392,17 @@ window.__ModuleLoader__.load({
 
       const saveOverride = () => {
         const baseURL = overrideBaseInput.trim()
-        const apiKey = overrideKeyInput.trim()
+        let apiKey = overrideKeyInput.trim()
+        // Strip surrounding quotes if the key was pasted with them
+        // ("sk-..." / 'sk-...'): the relay would reject the quotes as part
+        // of the key. (The config path does the same in the Host.)
+        if (apiKey.length >= 2) {
+          const first = apiKey[0]
+          const last = apiKey[apiKey.length - 1]
+          if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+            apiKey = apiKey.slice(1, -1).trim()
+          }
+        }
         if (baseURL !== '' && !/^https?:\/\//i.test(baseURL)) return
         const next = baseURL === '' && apiKey === '' ? null : { baseURL, apiKey }
         setOverride(next)
