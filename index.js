@@ -2,8 +2,9 @@
  * dsh-relay-balance — Host half.
  *
  * One same-origin route, GET /dsh-relay-balance/balance, that reads a New API
- * relay's account ledger (spanagent.xyz by default) and returns a flat JSON
- * summary for the sidebar panel. The API key lives only in this Host process:
+ * relay's balance for the configured key (spanagent.xyz by default) and
+ * returns a flat JSON summary for the sidebar panel. The API key lives only
+ * in this Host process:
  * it is read from the plugin config (see README), sent to the relay as an
  * Authorization header, and never logged, never returned, never sent to the
  * browser (only a masked hint, sk-••••xxxx, is exposed).
@@ -34,9 +35,10 @@
  * The panel may override the relay address and key per request with the
  * X-Relay-Base-URL / X-Relay-Key headers; the override applies to that
  * fetch only and the cache is keyed by the effective credentials. An
- * overridden key only changes which account is queried — the account
- * ledger always wins over one key's own figures, so other keys' usage
- * stays counted in.
+ * overridden key changes which key is queried; the numbers shown are that
+ * key's own figures, not the account's — the relay API does not expose the
+ * account balance through a key. The client shows the account balance via
+ * the manually entered remaining balance.
  */
 
 const ROUTE_PATH = '/dsh-relay-balance/balance'
@@ -391,10 +393,12 @@ async function fetchBalance(cfg) {
   const neverExpires = expiresRaw === 0 || expiresRaw === -1
   const modelLimits = usage !== null ? parseModelLimits(usage) : undefined
 
-  // The account ledger (/api/user/self) always wins: the panel shows the
-  // account's remaining balance and total used, not one key's own figures.
-  // The per-key ledger is only the fallback when the account ledger is
-  // unavailable, so other keys' usage is counted in.
+  // The /api/user/self ledger wins when it provides numbers, with the
+  // per-key ledger as the fallback. Note these are the numbers the relay
+  // reports for this key's credential — on this relay they are the key's
+  // own figures, not the account's (the account balance the dashboard
+  // shows is not exposed through a key). The client labels them as such,
+  // and the manual remaining balance is how the account balance is shown.
   const balanceQuota = quota ?? (available ?? (granted !== undefined && usedByKey !== undefined ? granted - usedByKey : undefined))
   const usedQuotaFinal = usedQuota ?? usedByKey
   // An unlimited key still draws from a finite account balance: show the

@@ -72,32 +72,40 @@ shows "No API key configured" until a key is set.
 
 ## Manual remaining balance
 
-The panel lets you enter a **manual total**: the total amount you topped
-up, in the same currency the panel shows (¥ on spanagent). Save it and the
-remaining balance is computed as "manual total − total used"; as total used
-grows, the remaining balance drops. Update the number after each top-up.
-Clear it to go back to the balance the relay reports.
+The relay API only reports **this key's** numbers (its remaining balance and
+its total used) — it never exposes the account's balance. So the panel lets
+you enter the account's **current remaining balance** as shown on the relay
+dashboard, in the same currency the panel shows (¥ on spanagent). Save it
+and the panel shows that number minus what this key uses after you save it:
+"manual remaining − used since saving". As this key is used, the remaining
+balance drops. Re-enter the number after a top-up, or when you switch keys
+(the saved baseline belongs to the key it was saved for; if the key changes,
+the panel says so and falls back to the key's own remaining until you
+re-enter it). Clear it to go back to the balance the relay reports for this
+key.
 
-The manual total is stored in the panel's local storage — no config edit,
+The manual remaining is stored in the panel's local storage — no config edit,
 no restart. It has to be re-entered on another machine or after clearing
 browser data. The rail icon's low-balance red dot still follows the balance
 the relay reports.
 
+Note the limit: only this key's usage after you save is subtracted. If other
+keys on the same account are used, or the account is topped up, the shown
+number drifts — re-enter the dashboard balance to re-sync.
+
 ## Enter the relay address and key in the panel
 
 The panel lets you enter a relay address and API key directly — no config
-edit, no restart. Save it and the panel reads that key's data. With a key
-entered, the panel shows the account's remaining balance and total used
-(`quota` / `used_quota`) for that key, so other keys' usage is counted in —
-the key is only the credential used to query; the numbers shown are always
-the account's. Leave both fields empty and clear to go back to the key from
-the config.
+edit, no restart. Save it and the panel reads that key's data: the remaining
+balance and total used shown are **that key's own numbers**, not the
+account's — the relay API does not expose the account balance through a key.
+To see the account's remaining balance, enter it in the manual remaining
+balance section above. Leave both fields empty and clear to go back to the
+key from the config.
 
 The address and key are stored in the panel's local storage and sent only
 to the Host on your own machine. They have to be re-entered on another
-machine or after clearing browser data. The manual total should be that
-account's total top-up, so "manual total − total used" is the account's
-remaining balance.
+machine or after clearing browser data.
 
 ## Version note
 

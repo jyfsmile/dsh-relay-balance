@@ -49,7 +49,7 @@ window.__ModuleLoader__.load({
         'rail.label': 'Relay Balance',
         'panel.title': 'Relay Balance',
         'panel.balance': 'Balance',
-        'panel.used': 'Total used',
+        'panel.used': "This key's total used",
         'panel.today': 'Spent today',
         'panel.requestsToday': 'Requests today',
         'panel.requestsTotal': 'Total requests',
@@ -69,17 +69,20 @@ window.__ModuleLoader__.load({
         'panel.errorRelay': 'The relay had a temporary problem: {error}',
         'panel.errorNoKey': 'No API key configured.',
         'panel.lowBalance': 'Balance is low (under $1).',
-        'panel.manualActive': 'Manual total {base} − total used {used}',
+        'panel.manualActive': 'Manual remaining {base} − used since saving {used}',
         'panel.manualClear': 'Clear',
-        'panel.manualHint': 'Enter the total amount you topped up (same currency as the panel). Remaining = manual total − total used. Update it after each top-up.',
-        'panel.manualPlaceholder': 'e.g. 500',
+        'panel.manualHeroNote': 'Manual balance — this key’s usage since saving is subtracted',
+        'panel.manualHint': 'Enter the account’s current remaining balance as shown on the relay dashboard (same currency as the panel). The panel subtracts what this key uses after you save it. Re-enter it after a top-up or when you switch keys.',
+        'panel.manualKeyChanged': 'The key changed, so the saved manual balance no longer applies. Enter the account’s current remaining balance again.',
+        'panel.manualPlaceholder': 'e.g. 3.99',
         'panel.manualSave': 'Save',
-        'panel.manualTitle': 'Manual balance',
+        'panel.manualTitle': 'Manual remaining balance',
+        'panel.manualWaiting': 'Saved {base}. Usage will be subtracted once the next reading arrives.',
         'panel.overrideActive': 'Using the key entered here',
         'panel.overrideApiKey': 'API Key',
         'panel.overrideBaseURL': 'API address',
         'panel.overrideClear': 'Clear',
-        'panel.overrideHint': 'Check another relay address or key here without editing the config file. The panel then shows the account’s remaining balance and total used for that key. Leave both fields empty to use the config.',
+        'panel.overrideHint': 'Check another relay address or key here without editing the config file. The panel then shows that key’s remaining balance and total used. Leave both fields empty to use the config.',
         'panel.overrideSave': 'Save',
         'panel.overrideTitle': 'Relay connection',
         'panel.unlimited': 'Unlimited quota',
@@ -100,7 +103,7 @@ window.__ModuleLoader__.load({
         'rail.label': '中转余额',
         'panel.title': '中转余额',
         'panel.balance': '剩余额度',
-        'panel.used': '累计已用',
+        'panel.used': '此 Key 累计已用',
         'panel.today': '今日实扣',
         'panel.requestsToday': '今日请求',
         'panel.requestsTotal': '累计请求',
@@ -120,17 +123,20 @@ window.__ModuleLoader__.load({
         'panel.errorRelay': '中转站暂时出了点问题：{error}',
         'panel.errorNoKey': '还没有填 API Key。',
         'panel.lowBalance': '余额偏低（低于 $1）。',
-        'panel.manualActive': '手动总额 {base} − 累计已用 {used}',
+        'panel.manualActive': '手动剩余额度 {base} − 自填写后已用 {used}',
         'panel.manualClear': '清除',
-        'panel.manualHint': '填你总共充值的金额（和面板同一个币种）。剩余额度 = 手动总额 − 累计已用，充值后记得更新这个数。',
-        'panel.manualPlaceholder': '例如 500',
+        'panel.manualHeroNote': '手动剩余额度，按此 Key 填写后的用量扣减',
+        'panel.manualHint': '填中转站后台显示的账号当前剩余额度（和面板同一个币种）。保存后，面板按此 Key 之后的使用量自动扣减。充值或换 Key 后请重新填写。',
+        'panel.manualKeyChanged': 'Key 已更换，之前填的手动剩余额度已失效，请重新填写账号当前剩余额度。',
+        'panel.manualPlaceholder': '例如 3.99',
         'panel.manualSave': '保存',
         'panel.manualTitle': '手动剩余额度',
+        'panel.manualWaiting': '已填 {base}，下次读到用量后开始扣减。',
         'panel.overrideActive': '正在使用这里填的 Key',
         'panel.overrideApiKey': 'API Key',
         'panel.overrideBaseURL': 'API 地址',
         'panel.overrideClear': '清除',
-        'panel.overrideHint': '在这里填另一个中转站地址 / Key 来查看，不用改配置文件。填了之后面板显示该 Key 所属账号的剩余额度与累计已用。两项都留空就用配置里的。',
+        'panel.overrideHint': '在这里填另一个中转站地址 / Key 来查看，不用改配置文件。填了之后面板显示该 Key 的剩余额度与累计已用。两项都留空就用配置里的。',
         'panel.overrideSave': '保存',
         'panel.overrideTitle': '中转站连接',
         'panel.unlimited': '额度不限',
@@ -203,27 +209,69 @@ window.__ModuleLoader__.load({
       return new Date(ms).toLocaleDateString()
     }
 
-    /** The manual balance base lives in the panel's local storage. */
+    /**
+     * The manually entered account remaining balance, in the panel's local
+     * storage. The relay API only reports this key's numbers, never the
+     * account's, so the account balance has to come from the user (the relay
+     * dashboard). Shape: { remaining, baseUsed, keySuffix, savedAt }.
+     * `remaining` is the account balance the user entered; `baseUsed` is
+     * this key's used value at the moment it was saved, so later readings
+     * subtract only what the key used after the save; `keySuffix` records
+     * which key the baseline belongs to.
+     */
+    const MANUAL_REMAINING_KEY = 'dsh-relay-balance:manualRemaining'
+    /** Legacy "manual total topped up" value; no longer used, removed on read. */
     const MANUAL_BASE_KEY = 'dsh-relay-balance:manualBase'
 
-    function readManualBase() {
+    function readManualRemaining() {
       try {
-        const raw = window.localStorage.getItem(MANUAL_BASE_KEY)
+        window.localStorage.removeItem(MANUAL_BASE_KEY)
+        const raw = window.localStorage.getItem(MANUAL_REMAINING_KEY)
         if (raw === null) return null
-        const n = Number(raw)
-        return Number.isFinite(n) && n >= 0 ? n : null
+        const parsed = JSON.parse(raw)
+        if (parsed === null || typeof parsed !== 'object') return null
+        const remaining = Number(parsed.remaining)
+        if (!Number.isFinite(remaining) || remaining < 0) return null
+        const baseUsed = parsed.baseUsed === null || parsed.baseUsed === undefined ? null : Number(parsed.baseUsed)
+        return {
+          remaining,
+          baseUsed: Number.isFinite(baseUsed) && baseUsed >= 0 ? baseUsed : null,
+          keySuffix: typeof parsed.keySuffix === 'string' ? parsed.keySuffix : null,
+          savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : null,
+        }
       } catch {
         return null
       }
     }
 
-    function writeManualBase(value) {
+    function writeManualRemaining(value) {
       try {
-        if (value === null) window.localStorage.removeItem(MANUAL_BASE_KEY)
-        else window.localStorage.setItem(MANUAL_BASE_KEY, String(value))
+        if (value === null) window.localStorage.removeItem(MANUAL_REMAINING_KEY)
+        else window.localStorage.setItem(MANUAL_REMAINING_KEY, JSON.stringify(value))
       } catch {
         // Storage may be unavailable; the panel simply falls back to the relay balance.
       }
+    }
+
+    /** What this key has used since the manual remaining was saved (currency), or null if unknown. */
+    function manualUsedDelta(manual, usedValue) {
+      if (manual === null || usedValue === undefined || usedValue === null) return null
+      if (manual.baseUsed === null || manual.baseUsed === undefined) return 0
+      return Math.max(0, usedValue - manual.baseUsed)
+    }
+
+    /** Remaining balance implied by the manual anchor, or null when no manual balance is set. */
+    function manualComputedRemaining(manual, usedValue) {
+      if (manual === null) return null
+      const delta = manualUsedDelta(manual, usedValue)
+      if (delta === null) return manual.remaining
+      return manual.remaining - delta
+    }
+
+    /** True when the key in use is no longer the one the manual balance was saved for. */
+    function manualKeyChanged(manual, keyHint) {
+      return manual !== null && manual.keySuffix !== null && manual.keySuffix !== undefined
+        && keyHint !== undefined && keyHint !== null && manual.keySuffix !== keyHint
     }
 
     /** The panel-entered relay address / key, also in local storage. */
@@ -336,11 +384,14 @@ window.__ModuleLoader__.load({
       const [detail, setDetail] = React.useState(null)
       const [updatedAt, setUpdatedAt] = React.useState(null)
       const [refreshSeconds, setRefreshSeconds] = React.useState(30)
-      const [manualBase, setManualBase] = React.useState(() => readManualBase())
+      const [manualRemaining, setManualRemaining] = React.useState(() => readManualRemaining())
       const [manualInput, setManualInput] = React.useState(() => {
-        const initial = readManualBase()
-        return initial === null ? '' : String(initial)
+        const initial = readManualRemaining()
+        return initial === null ? '' : String(initial.remaining)
       })
+      // Latest successful reading, for anchoring a manual save to this key's
+      // current used value (the save handler lives where the data is).
+      const latestDataRef = React.useRef(null)
       const [override, setOverride] = React.useState(() => readOverride())
       const [overrideBaseInput, setOverrideBaseInput] = React.useState(() => readOverride()?.baseURL ?? '')
       const [overrideKeyInput, setOverrideKeyInput] = React.useState(() => readOverride()?.apiKey ?? '')
@@ -355,6 +406,7 @@ window.__ModuleLoader__.load({
           const body = await response.json().catch(() => ({}))
           if (body && body.ok === true) {
             setData(body)
+            latestDataRef.current = body
             setError(null)
             setDetail(null)
             // Use the Host's fetch time, so a cached result shows its real age.
@@ -362,33 +414,37 @@ window.__ModuleLoader__.load({
             if (typeof body.refreshSeconds === 'number' && body.refreshSeconds >= 10) {
               setRefreshSeconds(body.refreshSeconds)
             }
+            // If a manual remaining was saved before any reading arrived, its
+            // baseline is still empty: anchor it to this first reading's used
+            // value (and the key it came from) so the delta starts at zero.
+            const usedValue = body.usedDisplay ?? body.usedUsd
+            if (typeof usedValue === 'number') {
+              const manual = readManualRemaining()
+              if (manual !== null && (manual.baseUsed === null || manual.baseUsed === undefined)) {
+                const anchored = {
+                  ...manual,
+                  baseUsed: usedValue,
+                  keySuffix: manual.keySuffix ?? (typeof body.keyHint === 'string' ? body.keyHint : null),
+                }
+                writeManualRemaining(anchored)
+                setManualRemaining(anchored)
+              }
+            }
           } else {
             setData(null)
+            latestDataRef.current = null
             setError(body && typeof body.error === 'string' ? body.error : 'unknown')
             setDetail(body && typeof body.detail === 'string' ? body.detail : null)
           }
         } catch {
           setData(null)
+          latestDataRef.current = null
           setError('network')
           setDetail(null)
         } finally {
           setLoading(false)
         }
       }, [])
-
-      const saveManualBase = () => {
-        if (manualInput.trim() === '') return
-        const n = Number(manualInput)
-        if (!Number.isFinite(n) || n < 0) return
-        setManualBase(n)
-        writeManualBase(n)
-      }
-
-      const clearManualBase = () => {
-        setManualBase(null)
-        setManualInput('')
-        writeManualBase(null)
-      }
 
       const saveOverride = () => {
         const baseURL = overrideBaseInput.trim()
@@ -598,15 +654,17 @@ window.__ModuleLoader__.load({
         }
         if (data === null) return null
 
-        // Manual balance: remaining = manual total − total used, using the
-        // same "total used" number the stats grid shows. Falls back to the
-        // relay balance when no manual total is set or no used figure exists.
+        // Manual remaining balance: the account's current remaining, entered
+        // by hand, minus what this key has used since it was saved. The relay
+        // API only reports this key's numbers, so the account balance itself
+        // has to come from the user (the relay dashboard). Falls back to the
+        // key's own remaining when no manual balance is set or the key
+        // changed since it was saved.
         const usedValue = data.usedDisplay ?? data.usedUsd
-        const manualRemaining = manualBase !== null && typeof usedValue === 'number'
-          ? manualBase - usedValue
-          : undefined
-        const displayBalance = manualRemaining !== undefined
-          ? manualRemaining
+        const manualValid = manualRemaining !== null && !manualKeyChanged(manualRemaining, data.keyHint)
+        const manualComputed = manualValid ? manualComputedRemaining(manualRemaining, usedValue) : null
+        const displayBalance = manualComputed !== null
+          ? manualComputed
           : (data.balanceDisplay ?? data.balanceUsd)
         const isLow = typeof displayBalance === 'number' && displayBalance < LOW_BALANCE_USD
         const hasBalance = displayBalance !== undefined && displayBalance !== null
@@ -659,6 +717,10 @@ window.__ModuleLoader__.load({
           data.unlimited === true && hasBalance
             ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
                 text(translate, 'panel.unlimitedNote'))
+            : null,
+          manualValid && manualComputed !== null
+            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+                text(translate, 'panel.manualHeroNote'))
             : null,
           isLow
             ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-state-error-primary, #d33)' } },
@@ -727,8 +789,30 @@ window.__ModuleLoader__.load({
           )),
         )
 
-        // Manual balance: an input for the total topped-up amount, saved in
-        // local storage. Remaining = manual total − total used.
+        // Manual remaining balance: the account's current remaining, entered
+        // by hand. Saving records this key's used value as the baseline, so
+        // later readings subtract only what the key used after the save.
+        const saveManualRemaining = () => {
+          if (manualInput.trim() === '') return
+          const n = Number(manualInput)
+          if (!Number.isFinite(n) || n < 0) return
+          const next = {
+            remaining: n,
+            baseUsed: typeof usedValue === 'number' ? usedValue : null,
+            keySuffix: typeof data.keyHint === 'string' ? data.keyHint : null,
+            savedAt: Date.now(),
+          }
+          setManualRemaining(next)
+          writeManualRemaining(next)
+        }
+
+        const clearManualRemaining = () => {
+          setManualRemaining(null)
+          setManualInput('')
+          writeManualRemaining(null)
+        }
+
+        const manualDelta = manualValid ? manualUsedDelta(manualRemaining, usedValue) : null
         const manualSection = h(
           'div',
           { style: { ...cardStyle, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' } },
@@ -746,22 +830,30 @@ window.__ModuleLoader__.load({
               onChange: (event) => setManualInput(event.target.value),
               style: { ...fieldStyle, flex: 1 },
             }),
-            h('button', { type: 'button', onClick: saveManualBase, style: manualButtonStyle },
+            h('button', { type: 'button', onClick: saveManualRemaining, style: manualButtonStyle },
               text(translate, 'panel.manualSave')),
-            manualBase !== null
-              ? h('button', { type: 'button', onClick: clearManualBase, style: manualButtonStyle },
+            manualRemaining !== null
+              ? h('button', { type: 'button', onClick: clearManualRemaining, style: manualButtonStyle },
                   text(translate, 'panel.manualClear'))
               : null,
           ),
           h('div', { style: { fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' } },
             text(translate, 'panel.manualHint')),
-          manualRemaining !== undefined
-            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
-                text(translate, 'panel.manualActive', {
-                  base: fmtMoney(manualBase, data.currency),
-                  used: fmtMoney(usedValue, data.currency),
-                }))
-            : null,
+          manualRemaining !== null && !manualValid
+            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-state-error-primary, #d33)' } },
+                text(translate, 'panel.manualKeyChanged'))
+            : manualDelta !== null
+              ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+                  text(translate, 'panel.manualActive', {
+                    base: fmtMoney(manualRemaining.remaining, data.currency),
+                    used: fmtMoney(manualDelta, data.currency),
+                  }))
+              : manualRemaining !== null
+                ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+                    text(translate, 'panel.manualWaiting', {
+                      base: fmtMoney(manualRemaining.remaining, data.currency),
+                    }))
+                : null,
         )
 
         return h(
