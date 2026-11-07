@@ -70,6 +70,19 @@ Add (or replace) the plugin row with a `config:` block:
 After editing, **fully quit DSH (tray included) and restart**. The panel
 shows "No API key configured" until a key is set.
 
+## Manual remaining balance
+
+The panel lets you enter a **manual total**: the total amount you topped
+up, in the same currency the panel shows (¥ on spanagent). Save it and the
+remaining balance is computed as "manual total − total used"; as total used
+grows, the remaining balance drops. Update the number after each top-up.
+Clear it to go back to the balance the relay reports.
+
+The manual total is stored in the panel's local storage — no config edit,
+no restart. It has to be re-entered on another machine or after clearing
+browser data. The rail icon's low-balance red dot still follows the balance
+the relay reports.
+
 ## Version note
 
 Works on **DSH >= 0.1.7-rc.2, including 0.2.2-rc.1**. The plugin declares

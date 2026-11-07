@@ -69,6 +69,12 @@ window.__ModuleLoader__.load({
         'panel.errorRelay': 'The relay had a temporary problem: {error}',
         'panel.errorNoKey': 'No API key configured.',
         'panel.lowBalance': 'Balance is low (under $1).',
+        'panel.manualActive': 'Manual total {base} − total used {used}',
+        'panel.manualClear': 'Clear',
+        'panel.manualHint': 'Enter the total amount you topped up (same currency as the panel). Remaining = manual total − total used. Update it after each top-up.',
+        'panel.manualPlaceholder': 'e.g. 500',
+        'panel.manualSave': 'Save',
+        'panel.manualTitle': 'Manual balance',
         'panel.unlimited': 'Unlimited quota',
         'panel.unlimitedNote': 'This key has no quota limit',
         'panel.subRequestsTotal': 'Total {n} requests',
@@ -107,6 +113,12 @@ window.__ModuleLoader__.load({
         'panel.errorRelay': '中转站暂时出了点问题：{error}',
         'panel.errorNoKey': '还没有填 API Key。',
         'panel.lowBalance': '余额偏低（低于 $1）。',
+        'panel.manualActive': '手动总额 {base} − 累计已用 {used}',
+        'panel.manualClear': '清除',
+        'panel.manualHint': '填你总共充值的金额（和面板同一个币种）。剩余额度 = 手动总额 − 累计已用，充值后记得更新这个数。',
+        'panel.manualPlaceholder': '例如 500',
+        'panel.manualSave': '保存',
+        'panel.manualTitle': '手动剩余额度',
         'panel.unlimited': '额度不限',
         'panel.unlimitedNote': '此 Key 额度不限',
         'panel.subRequestsTotal': '累计 {n} 次请求',
@@ -175,6 +187,29 @@ window.__ModuleLoader__.load({
     function fmtDate(ms) {
       if (ms === undefined || ms === null) return '—'
       return new Date(ms).toLocaleDateString()
+    }
+
+    /** The manual balance base lives in the panel's local storage. */
+    const MANUAL_BASE_KEY = 'dsh-relay-balance:manualBase'
+
+    function readManualBase() {
+      try {
+        const raw = window.localStorage.getItem(MANUAL_BASE_KEY)
+        if (raw === null) return null
+        const n = Number(raw)
+        return Number.isFinite(n) && n >= 0 ? n : null
+      } catch {
+        return null
+      }
+    }
+
+    function writeManualBase(value) {
+      try {
+        if (value === null) window.localStorage.removeItem(MANUAL_BASE_KEY)
+        else window.localStorage.setItem(MANUAL_BASE_KEY, String(value))
+      } catch {
+        // Storage may be unavailable; the panel simply falls back to the relay balance.
+      }
     }
 
     /**
@@ -250,6 +285,11 @@ window.__ModuleLoader__.load({
       const [detail, setDetail] = React.useState(null)
       const [updatedAt, setUpdatedAt] = React.useState(null)
       const [refreshSeconds, setRefreshSeconds] = React.useState(30)
+      const [manualBase, setManualBase] = React.useState(() => readManualBase())
+      const [manualInput, setManualInput] = React.useState(() => {
+        const initial = readManualBase()
+        return initial === null ? '' : String(initial)
+      })
 
       // fresh=true asks the Host for a live relay read, bypassing its 30s
       // cache (the manual refresh / retry buttons). The auto path calls
@@ -281,6 +321,20 @@ window.__ModuleLoader__.load({
           setLoading(false)
         }
       }, [])
+
+      const saveManualBase = () => {
+        if (manualInput.trim() === '') return
+        const n = Number(manualInput)
+        if (!Number.isFinite(n) || n < 0) return
+        setManualBase(n)
+        writeManualBase(n)
+      }
+
+      const clearManualBase = () => {
+        setManualBase(null)
+        setManualInput('')
+        writeManualBase(null)
+      }
 
       // Auto-refresh, cleaned up on unmount; the interval follows the
       // refreshSeconds the Host route reports (default 30s).
@@ -397,10 +451,20 @@ window.__ModuleLoader__.load({
         }
         if (data === null) return null
 
-        const isLow = typeof data.balanceUsd === 'number' && data.balanceUsd < LOW_BALANCE_USD
-        const hasBalance = data.balanceUsd !== undefined && data.balanceUsd !== null
+        // Manual balance: remaining = manual total − total used, using the
+        // same "total used" number the stats grid shows. Falls back to the
+        // relay balance when no manual total is set or no used figure exists.
+        const usedValue = data.usedDisplay ?? data.usedUsd
+        const manualRemaining = manualBase !== null && typeof usedValue === 'number'
+          ? manualBase - usedValue
+          : undefined
+        const displayBalance = manualRemaining !== undefined
+          ? manualRemaining
+          : (data.balanceDisplay ?? data.balanceUsd)
+        const isLow = typeof displayBalance === 'number' && displayBalance < LOW_BALANCE_USD
+        const hasBalance = displayBalance !== undefined && displayBalance !== null
         const balanceText = hasBalance
-          ? fmtMoney(data.balanceDisplay ?? data.balanceUsd, data.currency)
+          ? fmtMoney(displayBalance, data.currency)
           : data.unlimited === true
             ? text(translate, 'panel.unlimited')
             : '—'
@@ -516,10 +580,69 @@ window.__ModuleLoader__.load({
           )),
         )
 
+        // Manual balance: an input for the total topped-up amount, saved in
+        // local storage. Remaining = manual total − total used.
+        const manualButtonStyle = {
+          padding: '6px 12px',
+          fontSize: '12px',
+          fontWeight: 500,
+          borderRadius: '999px',
+          border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
+          background: 'var(--dsw-alias-button-elevated-fill, rgba(128,128,128,0.08))',
+          color: 'var(--dsw-alias-label-primary)',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }
+        const manualSection = h(
+          'div',
+          { style: { ...cardStyle, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' } },
+          h('span', { style: labelStyle }, text(translate, 'panel.manualTitle')),
+          h(
+            'div',
+            { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+            h('input', {
+              type: 'number',
+              inputMode: 'decimal',
+              min: '0',
+              step: 'any',
+              value: manualInput,
+              placeholder: text(translate, 'panel.manualPlaceholder'),
+              onChange: (event) => setManualInput(event.target.value),
+              style: {
+                flex: 1,
+                minWidth: 0,
+                padding: '6px 10px',
+                fontSize: '13px',
+                borderRadius: '8px',
+                border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
+                background: 'var(--dsw-alias-bg-base, transparent)',
+                color: 'var(--dsw-alias-label-primary)',
+                outline: 'none',
+              },
+            }),
+            h('button', { type: 'button', onClick: saveManualBase, style: manualButtonStyle },
+              text(translate, 'panel.manualSave')),
+            manualBase !== null
+              ? h('button', { type: 'button', onClick: clearManualBase, style: manualButtonStyle },
+                  text(translate, 'panel.manualClear'))
+              : null,
+          ),
+          h('div', { style: { fontSize: '12px', lineHeight: 1.5, color: 'var(--dsw-alias-label-secondary)' } },
+            text(translate, 'panel.manualHint')),
+          manualRemaining !== undefined
+            ? h('div', { style: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)' } },
+                text(translate, 'panel.manualActive', {
+                  base: fmtMoney(manualBase, data.currency),
+                  used: fmtMoney(usedValue, data.currency),
+                }))
+            : null,
+        )
+
         return h(
           'div',
           { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
           hero,
+          manualSection,
           grid,
           meta,
         )
