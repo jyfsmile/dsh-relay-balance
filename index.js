@@ -39,9 +39,51 @@
  * key's own figures, not the account's — the relay API does not expose the
  * account balance through a key. The client shows the account balance via
  * the manually entered remaining balance.
+ *
+ * Two more same-origin routes serve the panel's one-click update:
+ * GET /dsh-relay-balance/update/check compares the installed version with
+ * the repo's package.json on main, and POST /dsh-relay-balance/update/apply
+ * downloads the plugin's files from that repo and replaces the installed
+ * copies. Updates only ever come from this plugin's own GitHub repo
+ * (jyfsmile/dsh-relay-balance, branch main); no other source is fetched.
+ * The new code takes effect on the next DSH start: the desktop profile
+ * does not hot-reload plugin code (its HMR module watcher is off), and the
+ * loader re-imports the cached module on a disable/enable cycle, so a
+ * restart is still required — the button removes the quit / CLI / bat steps,
+ * not the restart itself. The API key and the panel's local settings are
+ * never touched by an update: the key lives in the profile config, not in
+ * the plugin files.
  */
 
+import { readFile, rename, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 const ROUTE_PATH = '/dsh-relay-balance/balance'
+const UPDATE_CHECK_PATH = '/dsh-relay-balance/update/check'
+const UPDATE_APPLY_PATH = '/dsh-relay-balance/update/apply'
+/** The plugin's own GitHub repo: the only source an update is ever fetched from. */
+const UPDATE_REPO = 'jyfsmile/dsh-relay-balance'
+const UPDATE_BRANCH = 'main'
+const UPDATE_RAW_BASE = `https://raw.githubusercontent.com/${UPDATE_REPO}/${UPDATE_BRANCH}`
+/** Files an update replaces, relative to the plugin root. Mirrors a full `dsh plugin update`. */
+const UPDATE_FILES = [
+  'LICENSE',
+  'README.md',
+  'README.zh.md',
+  'client.js',
+  'cordis.patch.yml',
+  'dsh-plugin.json',
+  'icon.svg',
+  'index.js',
+  'locale/en.json',
+  'locale/zh.json',
+  'package.json',
+  'update-dsh-relay-balance.bat',
+]
+const UPDATE_FETCH_TIMEOUT_MS = 15000
+/** Latest-version answers are cached this long, so reopening the panel does not hit GitHub every time. */
+const UPDATE_CHECK_TTL_MS = 5 * 60_000
 const DEFAULT_BASE_URL = 'https://spanagent.xyz'
 const DEFAULT_QUOTA_PER_UNIT = 500000
 const TIMEOUT_MS = 15000
@@ -444,6 +486,113 @@ async function fetchBalance(cfg) {
   }
 }
 
+/* ──────────────────────────── one-click update ──────────────────────────── */
+
+/** Compare two x.y.z versions: -1 / 0 / 1. Non-numeric parts compare as 0. */
+function compareVersions(a, b) {
+  const pa = String(a).split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const pb = String(b).split('.').map((part) => Number.parseInt(part, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const da = pa[i] ?? 0
+    const db = pb[i] ?? 0
+    if (da !== db) return da < db ? -1 : 1
+  }
+  return 0
+}
+
+function isValidVersion(value) {
+  return typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value)
+}
+
+/** The installed plugin root: the directory holding this file. */
+function pluginDir() {
+  return dirname(fileURLToPath(import.meta.url))
+}
+
+async function readInstalledVersion() {
+  try {
+    const pkg = JSON.parse(await readFile(join(pluginDir(), 'package.json'), 'utf8'))
+    return typeof pkg.version === 'string' ? pkg.version : null
+  } catch {
+    return null
+  }
+}
+
+let updateCheckCache = null
+
+/**
+ * The latest published version, from the repo's package.json on main.
+ * Cached for 5 minutes; null when GitHub cannot be reached or the file is
+ * not this plugin's package.json.
+ */
+async function fetchLatestVersion() {
+  const now = Date.now()
+  if (updateCheckCache !== null && now - updateCheckCache.at < UPDATE_CHECK_TTL_MS) {
+    return updateCheckCache.latest
+  }
+  let latest = null
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), UPDATE_FETCH_TIMEOUT_MS)
+    try {
+      const response = await fetch(`${UPDATE_RAW_BASE}/package.json`, { signal: controller.signal })
+      if (response.ok) {
+        const pkg = await response.json()
+        if (pkg && pkg.name === 'dsh-relay-balance' && isValidVersion(pkg.version)) {
+          latest = pkg.version
+        }
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    latest = null
+  }
+  updateCheckCache = { at: now, latest }
+  return latest
+}
+
+/**
+ * Download every update file, then replace the installed copies atomically.
+ * All downloads finish before any write, so a network failure never leaves
+ * a half-updated plugin. Writes go through a temp file + rename, so a
+ * hardlinked store copy is never modified in place; the running process is
+ * unaffected (its code is already loaded) and the new files take effect on
+ * the next DSH start.
+ * @returns the new version on success.
+ */
+async function applyUpdate(latest) {
+  const contents = []
+  for (const rel of UPDATE_FILES) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), UPDATE_FETCH_TIMEOUT_MS)
+    try {
+      const response = await fetch(`${UPDATE_RAW_BASE}/${rel}`, { signal: controller.signal })
+      if (!response.ok) throw new Error(`HTTP ${response.status} for ${rel}`)
+      const buf = Buffer.from(await response.arrayBuffer())
+      if (buf.length === 0) throw new Error(`empty file ${rel}`)
+      contents.push([rel, buf])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  // Sanity-check the downloaded package.json before touching anything.
+  const pkgEntry = contents.find(([rel]) => rel === 'package.json')
+  const pkg = JSON.parse(pkgEntry[1].toString('utf8'))
+  if (pkg.name !== 'dsh-relay-balance' || pkg.version !== latest) {
+    throw new Error('downloaded package.json does not match the checked version')
+  }
+  const dir = pluginDir()
+  for (const [rel, buf] of contents) {
+    const target = join(dir, rel)
+    const tmp = `${target}.tmp-${process.pid}`
+    await writeFile(tmp, buf)
+    await rename(tmp, target)
+  }
+  updateCheckCache = { at: Date.now(), latest }
+  return latest
+}
+
 function isLoopbackAddress(address) {
   if (typeof address !== 'string' || address === '') return false
   const bare = address.startsWith('::ffff:') ? address.slice(7) : address
@@ -566,6 +715,82 @@ export function apply(ctx, config = {}) {
       },
     })
     if (typeof stop === 'function') disposers.push(stop)
+
+    // One-click update: check + apply. Same-origin, loopback-only, same as
+    // the balance route above. The panel calls these; nothing else should.
+    const sendJson = (res, status, body) => {
+      res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      })
+      res.end(JSON.stringify(body))
+    }
+    const loopbackOk = (req) => {
+      const peerOk = isLoopbackAddress(req.socket?.remoteAddress)
+      const hostOk = isLoopbackAddress(hostNameOf(req.headers.host))
+      return peerOk && hostOk
+    }
+    const stopCheck = server.register({
+      kind: 'exact',
+      path: UPDATE_CHECK_PATH,
+      handler: async (req, res) => {
+        if (req.method !== 'GET') {
+          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
+          return
+        }
+        if (!loopbackOk(req)) {
+          sendJson(res, 403, { ok: false, error: 'forbidden' })
+          return
+        }
+        const current = await readInstalledVersion()
+        const latest = await fetchLatestVersion()
+        if (current === null) {
+          sendJson(res, 200, { ok: false, error: 'unknown-version' })
+          return
+        }
+        if (latest === null) {
+          sendJson(res, 200, { ok: false, error: 'unreachable', current })
+          return
+        }
+        sendJson(res, 200, { ok: true, current, latest, updateAvailable: compareVersions(current, latest) < 0 })
+      },
+    })
+    if (typeof stopCheck === 'function') disposers.push(stopCheck)
+    const stopApply = server.register({
+      kind: 'exact',
+      path: UPDATE_APPLY_PATH,
+      handler: async (req, res) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
+          return
+        }
+        if (!loopbackOk(req)) {
+          sendJson(res, 403, { ok: false, error: 'forbidden' })
+          return
+        }
+        try {
+          const current = await readInstalledVersion()
+          const latest = await fetchLatestVersion()
+          if (current === null) {
+            sendJson(res, 200, { ok: false, error: 'unknown-version' })
+            return
+          }
+          if (latest === null) {
+            sendJson(res, 200, { ok: false, error: 'unreachable', current })
+            return
+          }
+          if (compareVersions(current, latest) >= 0) {
+            sendJson(res, 200, { ok: true, current, latest, updated: false })
+            return
+          }
+          const updated = await applyUpdate(latest)
+          sendJson(res, 200, { ok: true, current, latest: updated, updated: true, version: updated })
+        } catch (error) {
+          sendJson(res, 200, { ok: false, error: 'update-failed', detail: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    })
+    if (typeof stopApply === 'function') disposers.push(stopApply)
   }
 
   // `webServer` is optional: a composition without it simply has no route,
